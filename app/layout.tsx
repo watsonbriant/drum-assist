@@ -1,9 +1,9 @@
 import type { Metadata } from "next";
-import "./drumassist/da-styles.css";
+import "./worshipassist/da-styles.css";
 
 export const metadata: Metadata = {
-  title: "DrumAssist",
-  description: "Drum chart editor and player",
+  title: "WorshipAssist",
+  description: "Worship drum chart editor and player",
 };
 
 export default function RootLayout({

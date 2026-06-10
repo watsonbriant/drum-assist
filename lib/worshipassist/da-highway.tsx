@@ -1,7 +1,7 @@
 // @ts-nocheck
 "use client";
 
-/* DrumAssist — Highway canvas (React component) */
+/* WorshipAssist — Highway canvas (React component) */
 import React, { useRef, useEffect } from "react";
 import { DAStore } from "./da-store";
 
@@ -17,11 +17,34 @@ const GREY = "#3a3b41";
     return "rgba(" + r + "," + g + "," + b + "," + a + ")";
   }
 
+  function darken(hex, amt) {
+    const n = parseInt(hex.slice(1), 16);
+    let r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+    r = Math.max(0, r * (1 - amt));
+    g = Math.max(0, g * (1 - amt));
+    b = Math.max(0, b * (1 - amt));
+    return "rgb(" + (r | 0) + "," + (g | 0) + "," + (b | 0) + ")";
+  }
+
+  function laneNoteColor(lane, kind, crossed) {
+    if (crossed) return GREY;
+    const base = LANE_COLORS[lane];
+    return kind === "cymbal" ? darken(base, 0.22) : base;
+  }
+
   // Snap a time to the nearest grid line. snapDiv = subdivisions per beat.
   function snapTime(t, spb, offset, snapDiv) {
     const step = spb / snapDiv;      // seconds per grid line
     const k = Math.round((t - offset) / step);
     return offset + k * step;
+  }
+
+  function isKickNote(n) {
+    return n.lane === -1 || n.kind === "kick";
+  }
+
+  function sortByTimeFarToNear(notes) {
+    return notes.slice().sort(function (a, b) { return b.t - a.t; });
   }
 
   export function HighwayCanvas(props: Record<string, unknown>) {
@@ -35,6 +58,7 @@ const GREY = "#3a3b41";
     const geomRef = useRef(null);
     const rafRef = useRef(0);
     const hoverRef = useRef(null);       // {t, lane, kind} preview while editing
+    const scrubDragRef = useRef(null);   // {startY, startT, id} finger scrub on mobile
 
     function resolvePlacement(scLane, tool) {
       if (tool === "kick") return { lane: -1, kind: "kick" };
@@ -183,18 +207,21 @@ const GREY = "#3a3b41";
         ctx.stroke();
       }
 
-      // strike line + target ghosts
       drawStrike(ctx, g);
 
-      // notes (far to near so near ones overlap)
-      const notes = P.chart.notes.slice().sort((a, b) => b.t - a.t);
-      for (const n of notes) {
-        const dt = n.t - songPos;
-        if (dt <= -0.24 || dt > g.L + 0.05) continue;
-        const s = sFor(dt, g);
-        const y = yFor(s, g);
-        drawNote(ctx, n, s, y, g);
+      // notes: kicks first, then lane notes on top (both far-to-near)
+      function drawVisibleNotes(list) {
+        for (const n of sortByTimeFarToNear(list)) {
+          const dt = n.t - songPos;
+          if (dt <= -0.24 || dt > g.L + 0.05) continue;
+          const s = sFor(dt, g);
+          const y = yFor(s, g);
+          drawNote(ctx, n, s, y, g, dt <= 0);
+        }
       }
+      const all = P.chart.notes;
+      drawVisibleNotes(all.filter(isKickNote));
+      drawVisibleNotes(all.filter(function (n) { return !isKickNote(n); }));
 
       // hover ghost (editor)
       if (P.mode === "edit" && hoverRef.current) {
@@ -246,44 +273,31 @@ const GREY = "#3a3b41";
       ctx.strokeStyle = "#36c6da";
       ctx.stroke();
       ctx.restore();
-      // target ghosts
-      for (let i = 0; i < 4; i++) {
-        const cxl = laneCenterX(i, 1, g);
-        ctx.beginPath();
-        ctx.arc(cxl, y, g.baseR, 0, Math.PI * 2);
-        ctx.lineWidth = 2;
-        ctx.strokeStyle = hexA(LANE_COLORS[i], 0.5);
-        ctx.stroke();
-      }
-      // kick ghost (thin bar under strike)
-      ctx.beginPath();
-      ctx.rect(lx, y + g.baseR * 0.9, g.Wfull, 4);
-      ctx.fillStyle = hexA(KICK_COLOR, 0.28);
-      ctx.fill();
     }
 
-    function drawNote(ctx, n, s, y, g) {
+    function drawNote(ctx, n, s, y, g, crossed) {
       const r = g.baseR * s;
+      const kickColor = crossed ? GREY : KICK_COLOR;
       if (n.lane === -1 || n.kind === "kick") {
-        // kick bar across all lanes
+        // kick bar across all lanes (drawn before lane notes so they stack on top)
         const lx = g.cx - 0.5 * g.Wfull * s, w = g.Wfull * s;
         const h = Math.max(8, 18 * s);
         ctx.save();
-        ctx.shadowColor = hexA(KICK_COLOR, 0.5);
+        ctx.shadowColor = hexA(kickColor, crossed ? 0.2 : 0.5);
         ctx.shadowBlur = 10 * s;
         roundRect(ctx, lx, y - h / 2, w, h, h / 2);
-        ctx.fillStyle = KICK_COLOR;
+        ctx.fillStyle = kickColor;
         ctx.fill();
         ctx.restore();
-        ctx.strokeStyle = hexA("#ffffff", 0.5 * s);
+        ctx.strokeStyle = hexA("#ffffff", crossed ? 0.25 * s : 0.5 * s);
         ctx.lineWidth = 1.5;
         ctx.stroke();
         return;
       }
-      const color = LANE_COLORS[n.lane];
+      const color = laneNoteColor(n.lane, n.kind, crossed);
       const cxl = laneCenterX(n.lane, s, g);
       ctx.save();
-      ctx.shadowColor = hexA(color, 0.55);
+      ctx.shadowColor = hexA(color, crossed ? 0.15 : 0.55);
       ctx.shadowBlur = 12 * s;
       if (n.kind === "cymbal") {
         // diamond
@@ -297,15 +311,15 @@ const GREY = "#3a3b41";
         ctx.arc(cxl, y, r, 0, Math.PI * 2);
       }
       const fill = ctx.createLinearGradient(cxl, y - r, cxl, y + r);
-      fill.addColorStop(0, lighten(color, 0.25));
+      const hi = n.kind === "cymbal" ? 0.12 : 0.25;
+      fill.addColorStop(0, crossed ? lighten(GREY, 0.15) : lighten(color, hi));
       fill.addColorStop(1, color);
       ctx.fillStyle = fill;
       ctx.fill();
       ctx.restore();
       ctx.lineWidth = 1.5 * s + 0.5;
-      ctx.strokeStyle = hexA("#ffffff", 0.7);
+      ctx.strokeStyle = hexA("#ffffff", crossed ? 0.3 : 0.7);
       ctx.stroke();
-      // inner dot for snare to distinguish from toms? keep snare plain circle
     }
 
     function drawFlash(ctx, f, age, g) {
@@ -319,7 +333,7 @@ const GREY = "#3a3b41";
         ctx.restore();
         return;
       }
-      const color = LANE_COLORS[f.lane];
+      const color = laneNoteColor(f.lane, f.kind, false);
       const cxl = laneCenterX(f.lane, 1, g);
       ctx.save();
       ctx.globalAlpha = alpha;
@@ -354,9 +368,17 @@ const GREY = "#3a3b41";
       return "rgb(" + (r | 0) + "," + (g | 0) + "," + (b | 0) + ")";
     }
 
-    // ---- pointer interaction (editor) ----
+    // ---- pointer interaction ----
     function onPointerDown(e) {
       const P = propsRef.current;
+      if (e.button !== 0) return;
+
+      if (P.allowScrub && P.mode === "play") {
+        scrubDragRef.current = { startY: e.clientY, startT: P.getSongPos(), id: e.pointerId };
+        canvasRef.current.setPointerCapture(e.pointerId);
+        return;
+      }
+
       if (P.mode !== "edit") return;
       const g = geomRef.current;
       if (!g) return;
@@ -364,14 +386,14 @@ const GREY = "#3a3b41";
       const mx = e.clientX - rect.left, my = e.clientY - rect.top;
       const songPos = P.getSongPos();
 
-      // hit test existing notes -> remove
+      // hit test existing notes -> remove (lane notes before kicks when stacked)
       let hit = null, hitD = 1e9;
-      for (const n of P.chart.notes) {
+      function testNote(n) {
         const dt = n.t - songPos;
-        if (dt <= -0.24 || dt > g.L + 0.05) continue;
+        if (dt <= -0.24 || dt > g.L + 0.05) return;
         const s = sFor(dt, g);
         const y = yFor(s, g);
-        if (n.lane === -1 || n.kind === "kick") {
+        if (isKickNote(n)) {
           if (Math.abs(my - y) < Math.max(10, 12 * s)) {
             const d = Math.abs(my - y); if (d < hitD) { hitD = d; hit = n; }
           }
@@ -382,6 +404,8 @@ const GREY = "#3a3b41";
           if (d < r + 5 && d < hitD) { hitD = d; hit = n; }
         }
       }
+      for (const n of P.chart.notes) { if (!isKickNote(n)) testNote(n); }
+      for (const n of P.chart.notes) { if (isKickNote(n)) testNote(n); }
       if (hit) { P.onRemoveNote(hit.id); return; }
 
       // place new
@@ -394,8 +418,20 @@ const GREY = "#3a3b41";
       P.onAddNote({ t: t, lane: pl.lane, kind: pl.kind });
     }
 
+    function onPointerUp(e) {
+      if (scrubDragRef.current && scrubDragRef.current.id === e.pointerId) {
+        scrubDragRef.current = null;
+      }
+    }
+
     function onPointerMove(e) {
       const P = propsRef.current;
+      const drag = scrubDragRef.current;
+      if (drag && drag.id === e.pointerId) {
+        const dy = e.clientY - drag.startY;
+        P.onScrub(Math.max(0, drag.startT + dy * 0.004));
+        return;
+      }
       if (P.mode !== "edit") { hoverRef.current = null; return; }
       const g = geomRef.current;
       if (!g) return;
@@ -414,11 +450,10 @@ const GREY = "#3a3b41";
 
     function onWheel(e) {
       const P = propsRef.current;
-      if (P.mode !== "edit") return;
+      const canScrub = P.mode === "edit" || (P.allowScrub && P.mode === "play");
+      if (!canScrub) return;
       e.preventDefault();
-      const g = geomRef.current || computeGeom(canvasRef.current.clientWidth, canvasRef.current.clientHeight);
-      // scroll forward/back in time
-      const delta = (e.deltaY) * 0.0016 * (P.chart.bpm ? 1 : 1);
+      const delta = (e.deltaY) * 0.0016;
       P.onScrub(Math.max(0, P.getSongPos() + delta));
     }
 
@@ -426,12 +461,16 @@ const GREY = "#3a3b41";
       const cv = canvasRef.current;
       cv.addEventListener("pointerdown", onPointerDown);
       cv.addEventListener("pointermove", onPointerMove);
+      cv.addEventListener("pointerup", onPointerUp);
+      cv.addEventListener("pointercancel", onPointerUp);
       cv.addEventListener("pointerleave", onPointerLeave);
       cv.addEventListener("wheel", onWheel, { passive: false });
       rafRef.current = requestAnimationFrame(draw);
       return function () {
         cv.removeEventListener("pointerdown", onPointerDown);
         cv.removeEventListener("pointermove", onPointerMove);
+        cv.removeEventListener("pointerup", onPointerUp);
+        cv.removeEventListener("pointercancel", onPointerUp);
         cv.removeEventListener("pointerleave", onPointerLeave);
         cv.removeEventListener("wheel", onWheel);
         if (rafRef.current) cancelAnimationFrame(rafRef.current);

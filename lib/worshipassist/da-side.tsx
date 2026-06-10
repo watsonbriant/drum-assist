@@ -1,7 +1,7 @@
 // @ts-nocheck
 "use client";
 
-/* DrumAssist — Side panel (Editor + Player settings) */
+/* WorshipAssist — Side panel (Editor + Player settings) */
 import React from "react";
 import { DAStore } from "./da-store";
 import { DA_LANE_COLORS, DA_KICK_COLOR } from "./da-highway";
@@ -10,7 +10,8 @@ const LANE_COLORS = DA_LANE_COLORS;
 const KICK_COLOR = DA_KICK_COLOR;
   const SNAP_OPTS = [
     { div: 1, label: "1/4" }, { div: 2, label: "1/8" },
-    { div: 4, label: "1/16" }, { div: 3, label: "trip" }
+    { div: 4, label: "1/16" }, { div: 8, label: "1/32" },
+    { div: 3, label: "trip" }
   ];
 
   function NumField(p) {

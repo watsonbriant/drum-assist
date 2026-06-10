@@ -1,5 +1,5 @@
 // @ts-nocheck
-/* DrumAssist — Audio engine
+/* WorshipAssist — Audio engine
  * Drives everything off the Web Audio clock so the highway never drifts.
  */
 

@@ -1,17 +1,25 @@
 // @ts-nocheck
-/* DrumAssist — Chart store + persistence
+/* WorshipAssist — Chart store + persistence
  * Local cache: chart metadata + bodies in localStorage,
  * audio blobs in IndexedDB. Cloud sync via Supabase when configured.
  */
 
 import { DARemote } from "./da-remote";
 
-const LEGACY_CHART_KEY = "drumassist.chart.v1";
-  const LIB_KEY = "drumassist.library.v1";   // array of chart metadata
-  const CHART_PREFIX = "drumassist.chart.";   // + id  -> full chart JSON
-  const CUR_KEY = "drumassist.currentId.v1";
-  const UI_KEY = "drumassist.ui.v1";
-  const DB_NAME = "drumassist";
+const OLD_LIB_KEY = "drumassist.library.v1";
+  const OLD_CHART_PREFIX = "drumassist.chart.";
+  const OLD_CUR_KEY = "drumassist.currentId.v1";
+  const OLD_UI_KEY = "drumassist.ui.v1";
+  const OLD_LEGACY_CHART_KEY = "drumassist.chart.v1";
+  const OLD_DB_NAME = "drumassist";
+
+  const LEGACY_CHART_KEY = "worshipassist.chart.v1";
+  const LIB_KEY = "worshipassist.library.v1";
+  const CHART_PREFIX = "worshipassist.chart.";
+  const CUR_KEY = "worshipassist.currentId.v1";
+  const UI_KEY = "worshipassist.ui.v1";
+  const MIGRATED_KEY = "worshipassist.migrated.v1";
+  const DB_NAME = "worshipassist";
   const DB_STORE = "audio";
 
   let _id = 1;
@@ -171,11 +179,40 @@ const LEGACY_CHART_KEY = "drumassist.chart.v1";
     }
   }
 
+  // ---- One-time migration from DrumAssist storage keys ----
+  function migrateFromDrumAssist() {
+    try {
+      if (localStorage.getItem(MIGRATED_KEY)) return;
+
+      if (!localStorage.getItem(LIB_KEY)) {
+        const oldLib = localStorage.getItem(OLD_LIB_KEY);
+        if (oldLib) localStorage.setItem(LIB_KEY, oldLib);
+      }
+      if (!localStorage.getItem(UI_KEY)) {
+        const oldUi = localStorage.getItem(OLD_UI_KEY);
+        if (oldUi) localStorage.setItem(UI_KEY, oldUi);
+      }
+      if (!localStorage.getItem(CUR_KEY)) {
+        const oldCur = localStorage.getItem(OLD_CUR_KEY);
+        if (oldCur) localStorage.setItem(CUR_KEY, oldCur);
+      }
+
+      for (const m of readIndex()) {
+        const nk = CHART_PREFIX + m.id;
+        const ok = OLD_CHART_PREFIX + m.id;
+        const raw = localStorage.getItem(ok);
+        if (raw && !localStorage.getItem(nk)) localStorage.setItem(nk, raw);
+      }
+
+      localStorage.setItem(MIGRATED_KEY, "1");
+    } catch (e) {}
+  }
+
   // ---- One-time migration of the old single-chart format ----
   function migrateLegacy() {
     try {
       if (readIndex().length > 0) return;
-      const raw = localStorage.getItem(LEGACY_CHART_KEY);
+      const raw = localStorage.getItem(LEGACY_CHART_KEY) || localStorage.getItem(OLD_LEGACY_CHART_KEY);
       if (!raw) return;
       const c = Object.assign(defaultChart(), JSON.parse(raw));
       c.id = uid();
@@ -190,9 +227,9 @@ const LEGACY_CHART_KEY = "drumassist.chart.v1";
   }
 
   // ---- IndexedDB: one audio blob per chart id ----
-  function openDB() {
+  function openDB(name) {
     return new Promise(function (resolve, reject) {
-      const req = indexedDB.open(DB_NAME, 1);
+      const req = indexedDB.open(name || DB_NAME, 1);
       req.onupgradeneeded = function () {
         const db = req.result;
         if (!db.objectStoreNames.contains(DB_STORE)) db.createObjectStore(DB_STORE);
@@ -231,19 +268,25 @@ const LEGACY_CHART_KEY = "drumassist.chart.v1";
     }
   }
 
+  async function readAudioFromDb(dbName, key) {
+    try {
+      const db = await openDB(dbName);
+      const rec = await new Promise(function (resolve, reject) {
+        const tx = db.transaction(DB_STORE, "readonly");
+        const r = tx.objectStore(DB_STORE).get(key);
+        r.onsuccess = function () { resolve(r.result); };
+        r.onerror = function () { reject(r.error); };
+      });
+      db.close();
+      return rec || null;
+    } catch (e) { return null; }
+  }
+
   function rawLoadAudio(key) {
     return (async function () {
-      try {
-        const db = await openDB();
-        const rec = await new Promise(function (resolve, reject) {
-          const tx = db.transaction(DB_STORE, "readonly");
-          const r = tx.objectStore(DB_STORE).get(key);
-          r.onsuccess = function () { resolve(r.result); };
-          r.onerror = function () { reject(r.error); };
-        });
-        db.close();
-        return rec || null;
-      } catch (e) { return null; }
+      let rec = await readAudioFromDb(DB_NAME, key);
+      if (!rec && OLD_DB_NAME !== DB_NAME) rec = await readAudioFromDb(OLD_DB_NAME, key);
+      return rec;
     })();
   }
 
@@ -325,7 +368,7 @@ const LEGACY_CHART_KEY = "drumassist.chart.v1";
 export const DAStore = {
   uid, defaultChart, newChart, duplicateChart, loadUI, saveUI,
   listCharts, loadChartById, saveChartToLibrary, deleteChartById,
-  getCurrentId, setCurrentId, migrateLegacy, syncFromRemote,
+  getCurrentId, setCurrentId, migrateFromDrumAssist, migrateLegacy, syncFromRemote,
   saveAudio, loadAudio, clearAudio, copyAudio, exportJSON, importJSON,
   tsNum, tsDen, secPerBeat, isAccentBeat, isBarStart,
   DEFAULT_KEYMAP: DEFAULT_KEYMAP

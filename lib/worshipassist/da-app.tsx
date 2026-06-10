@@ -1,7 +1,7 @@
 // @ts-nocheck
 "use client";
 
-/* DrumAssist — Main app */
+/* WorshipAssist — Main app */
 import React, { useState, useRef, useEffect, useCallback } from "react";
 import { DAStore as S } from "./da-store";
 import { DAAudio as A } from "./da-audio";
@@ -12,8 +12,27 @@ import { SidePanel } from "./da-side";
     { div: 1, label: "1/4" },
     { div: 2, label: "1/8" },
     { div: 4, label: "1/16" },
+    { div: 8, label: "1/32" },
     { div: 3, label: "trip" }
   ];
+
+  const MOBILE_BREAKPOINT = 1440;
+
+  const TOOL_CYCLE = ["tom", "cymbal", "kick"];
+  const TOOL_LABELS = { tom: "Tom", cymbal: "Cymbal", kick: "Kick" };
+  function toolGlyph(tool) {
+    const color = tool === "kick" ? KICK_COLOR : LANE_COLORS[2];
+    if (tool === "cymbal") {
+      return React.createElement("svg", { viewBox: "0 0 22 22", width: 16, height: 16 },
+        React.createElement("polygon", { points: "11,2 20,11 11,20 2,11", fill: color }));
+    }
+    if (tool === "kick") {
+      return React.createElement("svg", { viewBox: "0 0 22 22", width: 16, height: 16 },
+        React.createElement("rect", { x: 1, y: 8, width: 20, height: 6, rx: 3, fill: color }));
+    }
+    return React.createElement("svg", { viewBox: "0 0 22 22", width: 16, height: 16 },
+      React.createElement("circle", { cx: 11, cy: 11, r: 8, fill: color }));
+  }
 
   // --- icons ---
   const I = {
@@ -46,6 +65,7 @@ import { SidePanel } from "./da-side";
     const [keyEntry, setKeyEntry] = useState(!!ui0.keyEntry);
     const [listenAction, setListenAction] = useState(null);
     const [mode, setMode] = useState(ui0.mode || "edit");
+    const [isMobile, setIsMobile] = useState(false);
     const [tool, setTool] = useState(ui0.tool || "tom");
     const [snapEnabled, setSnapEnabled] = useState(ui0.snapEnabled !== false);
     const [snapDiv, setSnapDiv] = useState(ui0.snapDiv || 2);
@@ -72,10 +92,24 @@ import { SidePanel } from "./da-side";
     const stateRef = useRef({});
     stateRef.current = { rate, loopOn, loopA, loopB, metro, playing, snapDiv, snapEnabled };
 
+    // mobile layout: player only below 1440px
+    useEffect(function () {
+      function check() { setIsMobile(window.innerWidth < MOBILE_BREAKPOINT); }
+      check();
+      window.addEventListener("resize", check);
+      return function () { window.removeEventListener("resize", check); };
+    }, []);
+    useEffect(function () {
+      if (isMobile && mode !== "play") setMode("play");
+    }, [isMobile, mode]);
+
+    const activeMode = isMobile ? "play" : mode;
+
     // load charts from cloud + local cache
     useEffect(function () {
       let dead = false;
       (async function () {
+        S.migrateFromDrumAssist();
         S.migrateLegacy();
         await S.syncFromRemote();
         if (dead) return;
@@ -296,6 +330,12 @@ import { SidePanel } from "./da-side";
       posRef.current = t;
       setTick(function (x) { return x + 1; });
     }
+    function scrubTransport(t) {
+      t = Math.max(0, Math.min(t, chartRef.current.duration || 0));
+      posRef.current = t;
+      if (A.isPlaying()) { metroBeatRef.current = -1; A.seek(t); }
+      setTick(function (x) { return x + 1; });
+    }
 
     function setRateSafe(r) { setRate(r); if (A.isPlaying()) A.setRate(r); }
 
@@ -321,6 +361,12 @@ import { SidePanel } from "./da-side";
     }
 
     function patchChart(patch) { setChart(function (c) { return Object.assign({}, c, patch); }); }
+    function cycleTool() {
+      setTool(function (t) {
+        const i = TOOL_CYCLE.indexOf(t);
+        return TOOL_CYCLE[(i + 1) % TOOL_CYCLE.length];
+      });
+    }
 
     // ---- waveform drawing ----
     function drawWave() {
@@ -531,7 +577,7 @@ import { SidePanel } from "./da-side";
           if (action) { e.preventDefault(); addNoteLive(action); return; }
         }
         if (e.code === "Space") { e.preventDefault(); togglePlay(); }
-        else if (e.key === "e") setMode("edit");
+        else if (e.key === "e" && window.innerWidth >= MOBILE_BREAKPOINT) setMode("edit");
         else if (e.key === "p") setMode("play");
         else if (e.code === "Enter") stopToStart();
       }
@@ -554,18 +600,20 @@ import { SidePanel } from "./da-side";
     scrollSecRef.current = 3.7 - (spacing - 1) * (3.7 - 1.3) / 9;
 
     // ---- render ----
-    return React.createElement("div", { className: "app", "data-mode": mode },
+    return React.createElement("div", { className: "app", "data-mode": activeMode, "data-layout": isMobile ? "mobile" : "desktop" },
       // topbar
       React.createElement("div", { className: "topbar" },
         React.createElement("div", { className: "brand" },
           React.createElement("div", { className: "brand-mark" }),
-          React.createElement("div", { className: "brand-name" }, "Drum", React.createElement("b", null, "Assist"))
+          React.createElement("div", { className: "brand-name" }, "Worship", React.createElement("b", null, "Assist"))
         ),
-        React.createElement("input", {
-          className: "chart-name", value: chart.name,
-          onChange: function (e) { patchChart({ name: e.target.value }); },
-          spellCheck: false
-        }),
+        isMobile
+          ? React.createElement("span", { className: "chart-name chart-name-readonly" }, chart.name)
+          : React.createElement("input", {
+            className: "chart-name", value: chart.name,
+            onChange: function (e) { patchChart({ name: e.target.value }); },
+            spellCheck: false
+          }),
         React.createElement("div", { className: "charts-menu" },
           React.createElement("button", { className: "btn ghost charts-btn", onClick: function () { setChartsOpen(!chartsOpen); } },
             "Charts", React.createElement("span", { className: "caret" }, "▾")),
@@ -591,35 +639,68 @@ import { SidePanel } from "./da-side";
           ) : null
         ),
         React.createElement("div", { className: "spacer" }),
-        React.createElement("div", { className: "seg" },
+        !isMobile ? React.createElement("div", { className: "seg" },
           React.createElement("button", { className: mode === "edit" ? "on" : "", onClick: function () { setMode("edit"); } }, "Editor"),
           React.createElement("button", { className: mode === "play" ? "on" : "", onClick: function () { setMode("play"); } }, "Player")
-        )
+        ) : null
       ),
       // body
       React.createElement("div", { className: "body" },
         React.createElement("div", { className: "stage" },
           React.createElement(HighwayCanvas, {
-            chart: chart, mode: mode, tool: tool, snapEnabled: snapEnabled, snapDiv: snapDiv,
-            getSongPos: getSongPos, onAddNote: addNote, onRemoveNote: removeNote, onScrub: scrubEdit,
+            chart: chart, mode: activeMode, tool: tool, snapEnabled: snapEnabled, snapDiv: snapDiv,
+            getSongPos: getSongPos, onAddNote: addNote, onRemoveNote: removeNote,
+            onScrub: isMobile ? scrubTransport : scrubEdit,
+            allowScrub: isMobile,
             scrollSeconds: 3.7 - (spacing - 1) * (3.7 - 1.3) / 9
           }),
           // HUD
           React.createElement("div", { className: "hud" },
             React.createElement("div", { className: "pill" }, "BPM ", React.createElement("b", null, chart.bpm)),
             React.createElement("div", { className: "pill" }, React.createElement("b", null, S.tsNum(chart) + "/" + S.tsDen(chart))),
-            React.createElement("div", { className: "pill" }, React.createElement("span", { className: "cy" }, mode === "edit" ? "EDIT" : "PLAY")),
-            mode === "edit" ? React.createElement("div", { className: "pill" }, "Bar ", React.createElement("b", null, bar > 0 ? bar : "—")) : null
+            React.createElement("div", { className: "pill" }, React.createElement("span", { className: "cy" }, activeMode === "edit" ? "EDIT" : "PLAY")),
+            activeMode === "edit" ? React.createElement("div", { className: "pill" }, "Bar ", React.createElement("b", null, bar > 0 ? bar : "—")) : null,
+            activeMode === "edit" ? React.createElement("button", {
+              className: "hud-tool-cycle",
+              onClick: cycleTool,
+              title: "Cycle note tool (Tom → Cymbal → Kick)"
+            },
+              toolGlyph(tool),
+              React.createElement("span", null, TOOL_LABELS[tool]),
+              React.createElement("svg", { viewBox: "0 0 24 24", width: 14, height: 14, fill: "currentColor", "aria-hidden": true },
+                React.createElement("path", { d: "M12 6v3l4-4-4-4v3c-4.42 0-8 3.58-8 8 0 1.57.46 3.03 1.24 4.26L6.7 14.8A5.87 5.87 0 0 1 6 12c0-3.31 2.69-6 6-6zm6.76 1.74L17.3 9.2A5.87 5.87 0 0 1 18 12c0 3.31-2.69 6-6 6v-3l-4 4 4 4v-3c4.42 0 8-3.58 8-8 0-1.57-.46-3.03-1.24-4.26z" })
+              )
+            ) : null
           ),
           !hasAudio ? React.createElement("div", { className: "empty" },
             React.createElement("h2", null, "Load a song to begin"),
-            React.createElement("p", null, "Drop in an audio file, set the BPM, then drag the yellow marker on the waveform to line up the first downbeat. Switch to Editor to chart your notes."),
-            React.createElement("button", { className: "btn primary", onClick: function () { fileRef.current.click(); } }, "Choose audio file…")
+            React.createElement("p", null, isMobile
+              ? "Open this chart on a desktop browser to load audio and edit notes."
+              : "Drop in an audio file, set the BPM, then drag the yellow marker on the waveform to line up the first downbeat. Switch to Editor to chart your notes."),
+            !isMobile ? React.createElement("button", { className: "btn primary", onClick: function () { fileRef.current.click(); } }, "Choose audio file…") : null
+          ) : null,
+          isMobile ? React.createElement("div", { className: "mobile-controls" },
+            React.createElement("div", { className: "mobile-controls-main" },
+              React.createElement("button", { className: "btn icon ghost", title: "Back to start", onClick: stopToStart }, React.createElement(Icon, { name: "rewind" })),
+              React.createElement("button", { className: "play-btn", title: "Play / Pause", onClick: togglePlay },
+                React.createElement(Icon, { name: playing ? "pause" : "play", size: 20 })),
+              React.createElement("div", { className: "mobile-time" },
+                React.createElement("span", { className: "timecode" }, fmtTime(pos)),
+                React.createElement("span", { className: "sep" }, " / "),
+                React.createElement("span", { className: "dim" }, fmtTime(chart.duration)),
+                React.createElement("span", { className: "mobile-bar" }, bar > 0 ? (bar + "." + beat) : "—.—")
+              )
+            ),
+            React.createElement("div", { className: "mobile-controls-speed" },
+              React.createElement("span", { className: "tlabel" }, "Speed"),
+              React.createElement("input", { type: "range", min: 0.5, max: 1.5, step: 0.05, value: rate, onChange: function (e) { setRateSafe(parseFloat(e.target.value)); } }),
+              React.createElement("span", { className: "timecode" }, rate.toFixed(2) + "×")
+            )
           ) : null
         ),
         // side panel
-        React.createElement(SidePanel, {
-          mode: mode, chart: chart, patchChart: patchChart, tool: tool, setTool: setTool,
+        !isMobile ? React.createElement(SidePanel, {
+          mode: activeMode, chart: chart, patchChart: patchChart, tool: tool, setTool: setTool,
           snapEnabled: snapEnabled, setSnapEnabled: setSnapEnabled, snapDiv: snapDiv, setSnapDiv: setSnapDiv,
           spacing: spacing, setSpacing: setSpacing,
           keyEntry: keyEntry, setKeyEntry: setKeyEntry, keymap: keymap, listenAction: listenAction,
@@ -632,10 +713,10 @@ import { SidePanel } from "./da-side";
           setLoopA: function () { setLoopA(getSongPos()); }, setLoopB: function () { setLoopB(getSongPos()); },
           clearLoop: function () { setLoopA(null); setLoopB(null); setLoopOn(false); },
           getPos: getSongPos
-        })
+        }) : null
       ),
-      // transport
-      React.createElement("div", { className: "transport" },
+      // transport (desktop only)
+      !isMobile ? React.createElement("div", { className: "transport" },
         React.createElement("div", { className: "overview-row" },
           React.createElement("span", { className: "overview-label" }, "OVERVIEW"),
           React.createElement("canvas", { className: "mini-canvas", ref: miniRef, onPointerDown: onMiniDown })
@@ -673,16 +754,16 @@ import { SidePanel } from "./da-side";
             React.createElement("button", { className: "btn " + (loopOn ? "on" : ""), onClick: function () { setLoopOn(!loopOn); }, disabled: loopA == null || loopB == null }, "Loop")
           )
         )
-      ),
-      // statusbar
-      React.createElement("div", { className: "statusbar" },
+      ) : null,
+      // statusbar (desktop only)
+      !isMobile ? React.createElement("div", { className: "statusbar" },
         React.createElement("span", null, React.createElement("span", { className: "dot" + (hasAudio ? "" : " off") }), " ", hasAudio ? (chart.audioName || "audio loaded") : "no audio"),
         React.createElement("span", null, chart.notes.length + " notes"),
         React.createElement("span", null, "snap " + (snapEnabled ? SNAP_OPTS.find(function (o) { return o.div === snapDiv; }).label : "off")),
         loopOn && loopA != null && loopB != null ? React.createElement("span", { className: "loop-tag" }, "loop " + fmtTime(loopA) + "–" + fmtTime(loopB)) : null,
         React.createElement("div", { className: "spacer", style: { flex: 1 } }),
         React.createElement("span", null, "saved locally")
-      ),
+      ) : null,
       React.createElement("input", {
         ref: fileRef, type: "file", accept: "audio/*", className: "file-input",
         onChange: function (e) { if (e.target.files[0]) handleFile(e.target.files[0]); e.target.value = ""; }

@@ -539,7 +539,7 @@
       React.createElement("div", { className: "topbar" },
         React.createElement("div", { className: "brand" },
           React.createElement("div", { className: "brand-mark" }),
-          React.createElement("div", { className: "brand-name" }, "Drum", React.createElement("b", null, "Assist"))
+          React.createElement("div", { className: "brand-name" }, "Worship", React.createElement("b", null, "Assist"))
         ),
         React.createElement("input", {
           className: "chart-name", value: chart.name,

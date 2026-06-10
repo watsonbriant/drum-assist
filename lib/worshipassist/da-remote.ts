@@ -1,5 +1,5 @@
 // @ts-nocheck
-/* DrumAssist — Supabase remote persistence (solo user, no auth) */
+/* WorshipAssist — Supabase remote persistence (solo user, no auth) */
 
 import { getSupabase, isSupabaseConfigured } from "@/lib/supabase/client";
 

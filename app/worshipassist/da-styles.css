@@ -30,7 +30,7 @@ body{
   -webkit-font-smoothing:antialiased;
   overflow:hidden;
 }
-#root{height:100vh;display:flex;flex-direction:column;}
+#root{height:100vh;height:100dvh;display:flex;flex-direction:column;}
 
 /* ---------- App shell ---------- */
 .app{display:flex;flex-direction:column;height:100vh;min-height:0;}
@@ -57,6 +57,10 @@ body{
 }
 .chart-name:hover{border-color:var(--border);}
 .chart-name:focus{outline:none;border-color:var(--accent-dim);color:var(--text);background:var(--bg-2);}
+.chart-name-readonly{
+  display:inline-block;color:var(--muted);font-size:13px;padding:4px 8px;
+  max-width:min(42vw,220px);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
 
 /* charts menu */
 .charts-menu{position:relative;}
@@ -127,6 +131,16 @@ body{
 }
 .hud .pill b{color:var(--text);font-weight:600;}
 .hud .pill .cy{color:var(--accent);}
+.hud .hud-tool-cycle{
+  pointer-events:auto;
+  display:inline-flex;align-items:center;gap:6px;
+  background:rgba(20,21,24,.78);border:1px solid var(--border);border-radius:6px;
+  padding:5px 10px;font-family:var(--mono);font-size:12px;color:var(--text);
+  backdrop-filter:blur(6px);cursor:pointer;
+}
+.hud .hud-tool-cycle:hover{background:rgba(32,34,39,.92);border-color:#4b505a;}
+.hud .hud-tool-cycle:active{transform:translateY(1px);}
+.hud .hud-tool-cycle svg:last-child{color:var(--muted);}
 
 .empty{
   position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;
@@ -245,3 +259,67 @@ kbd{font-family:var(--mono);font-size:11px;background:var(--bg-2);border:1px sol
 .statusbar .dot{width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 6px var(--green);}
 .statusbar .dot.off{background:var(--muted-2);box-shadow:none;}
 .loop-tag{color:var(--accent);}
+
+/* ---------- Mobile / tablet player layout (< 1440px) ---------- */
+.app[data-layout="mobile"]{
+  height:100dvh;
+}
+.app[data-layout="mobile"] .topbar{
+  padding:8px 12px;
+  padding-top:max(8px, env(safe-area-inset-top));
+  gap:10px;
+}
+.app[data-layout="mobile"] .brand-name{font-size:14px;}
+.app[data-layout="mobile"] .charts-pop{
+  left:auto;right:0;width:min(300px, calc(100vw - 24px));
+}
+.app[data-layout="mobile"] .body{flex:1 1 auto;min-height:0;}
+.app[data-layout="mobile"] .stage{flex:1 1 auto;}
+.app[data-layout="mobile"] .hw-wrap{touch-action:none;}
+.app[data-layout="mobile"] .hw-canvas{cursor:grab;touch-action:none;}
+.app[data-layout="mobile"] .hw-canvas:active{cursor:grabbing;}
+
+.mobile-controls{
+  position:absolute;left:0;right:0;bottom:0;z-index:20;pointer-events:auto;
+  padding:10px 14px max(12px, env(safe-area-inset-bottom));
+  background:linear-gradient(180deg, rgba(18,19,22,0) 0%, rgba(18,19,22,.82) 28%, rgba(18,19,22,.96) 100%);
+  display:flex;flex-direction:column;gap:10px;
+}
+.mobile-controls-main{
+  display:flex;align-items:center;gap:12px;
+}
+.mobile-controls .play-btn{
+  width:52px;height:52px;flex:0 0 auto;
+}
+.mobile-time{
+  flex:1 1 auto;min-width:0;
+  display:flex;align-items:baseline;flex-wrap:wrap;gap:2px 6px;
+  font-family:var(--mono);font-size:13px;
+}
+.mobile-time .sep,.mobile-time .dim{color:var(--muted-2);}
+.mobile-time .dim{color:var(--muted);}
+.mobile-bar{
+  font-family:var(--mono);font-size:12px;color:var(--accent);
+  padding:2px 8px;border-radius:5px;background:rgba(54,198,218,.12);
+}
+.mobile-controls-speed{
+  display:flex;align-items:center;gap:10px;
+}
+.mobile-controls-speed input[type=range]{flex:1 1 auto;}
+.mobile-controls-speed .tlabel{flex:0 0 auto;font-size:10px;}
+.mobile-controls-speed .timecode{flex:0 0 auto;font-size:12px;min-width:38px;}
+
+@media (max-width:1439px){
+  .app{height:100dvh;}
+}
+
+@media (max-width:1439px) and (orientation:landscape){
+  .app[data-layout="mobile"] .hud{top:8px;left:10px;gap:6px;flex-wrap:wrap;max-width:calc(100% - 20px);}
+  .app[data-layout="mobile"] .hud .pill{padding:4px 8px;font-size:11px;}
+  .mobile-controls{
+    flex-direction:row;align-items:center;gap:14px;
+    padding:8px 14px max(8px, env(safe-area-inset-bottom));
+  }
+  .mobile-controls-main{flex:1 1 auto;}
+  .mobile-controls-speed{flex:0 1 220px;}
+}
