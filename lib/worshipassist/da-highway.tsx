@@ -4,12 +4,15 @@
 /* WorshipAssist — Highway canvas (React component) */
 import React, { useRef, useEffect } from "react";
 import { DAStore } from "./da-store";
+import { formatChordDisplay } from "@/lib/nns";
 
 export const DA_LANE_COLORS = ["#e2483b", "#e8c020", "#2f86ea", "#33ad52"]; // red, yellow, blue, green
 export const DA_KICK_COLOR = "#ef8a17";
 const LANE_COLORS = DA_LANE_COLORS;
 const KICK_COLOR = DA_KICK_COLOR;
 const GREY = "#3a3b41";
+export const DA_CHORD_COLOR = "#a82e24";
+const CHORD_COLOR = DA_CHORD_COLOR;
 
   function hexA(hex, a) {
     const n = parseInt(hex.slice(1), 16);
@@ -45,6 +48,27 @@ const GREY = "#3a3b41";
 
   function sortByTimeFarToNear(notes) {
     return notes.slice().sort(function (a, b) { return b.t - a.t; });
+  }
+
+  function screenToTime(mx, my, g, songPos) {
+    let s = 1 - (g.strikeY - my) / (g.strikeY - g.horizonY);
+    if (s <= 0.02) s = 0.02;
+    const z = (1 / s) - 1;
+    return songPos + z / g.speed;
+  }
+
+  function chordLabel(n, chart, showChordNames) {
+    return formatChordDisplay(n.nashville, chart.songKey || "C", !!showChordNames);
+  }
+
+  function activeChordAt(songPos, chordNotes) {
+    const sorted = (chordNotes || []).slice().sort(function (a, b) { return a.t - b.t; });
+    let active = null;
+    for (const n of sorted) {
+      if (n.t <= songPos + 0.001) active = n;
+      else break;
+    }
+    return active;
   }
 
   export function HighwayCanvas(props: Record<string, unknown>) {
@@ -123,12 +147,23 @@ const GREY = "#3a3b41";
       const P = propsRef.current;
       const songPos = P.getSongPos();
 
+      const isChord = P.chartType === "chord";
+      const chordNotes = P.chart.chordNotes || [];
+
       // detect crossings for flash (player + edit preview)
       const prev = lastPosRef.current;
       if (songPos > prev) {
-        for (const n of P.chart.notes) {
-          if (n.t > prev && n.t <= songPos) {
-            flashesRef.current.push({ t0: performance.now(), lane: n.lane, kind: n.kind });
+        if (isChord) {
+          for (const n of chordNotes) {
+            if (n.t > prev && n.t <= songPos) {
+              flashesRef.current.push({ t0: performance.now(), kind: "chord" });
+            }
+          }
+        } else {
+          for (const n of P.chart.notes) {
+            if (n.t > prev && n.t <= songPos) {
+              flashesRef.current.push({ t0: performance.now(), lane: n.lane, kind: n.kind });
+            }
           }
         }
       }
@@ -155,16 +190,18 @@ const GREY = "#3a3b41";
       ctx.fillStyle = grad;
       ctx.fill();
 
-      // lane tints (subtle)
-      for (let i = 0; i < 4; i++) {
-        const lx0 = (i / 4 - 0.5), lx1 = ((i + 1) / 4 - 0.5);
-        ctx.beginPath();
-        ctx.moveTo(laneXbottom(lx0), g.H);
-        ctx.lineTo(laneXbottom(lx1), g.H);
-        ctx.lineTo(VPx, VPy);
-        ctx.closePath();
-        ctx.fillStyle = hexA(LANE_COLORS[i], 0.05);
-        ctx.fill();
+      // lane tints (drum only)
+      if (!isChord) {
+        for (let i = 0; i < 4; i++) {
+          const lx0 = (i / 4 - 0.5), lx1 = ((i + 1) / 4 - 0.5);
+          ctx.beginPath();
+          ctx.moveTo(laneXbottom(lx0), g.H);
+          ctx.lineTo(laneXbottom(lx1), g.H);
+          ctx.lineTo(VPx, VPy);
+          ctx.closePath();
+          ctx.fillStyle = hexA(LANE_COLORS[i], 0.05);
+          ctx.fill();
+        }
       }
 
       // beat grid lines
@@ -196,56 +233,82 @@ const GREY = "#3a3b41";
         ctx.stroke();
       }
 
-      // lane divider lines (converging to the shared vanishing point)
-      for (let i = 0; i <= 4; i++) {
-        const frac = i / 4 - 0.5;
-        ctx.beginPath();
-        ctx.moveTo(laneXbottom(frac), g.H);
-        ctx.lineTo(VPx, VPy);
-        ctx.lineWidth = (i === 0 || i === 4) ? 2 : 1;
-        ctx.strokeStyle = hexA("#4a4d55", 0.9);
-        ctx.stroke();
+      // lane divider lines (drum only)
+      if (!isChord) {
+        for (let i = 0; i <= 4; i++) {
+          const frac = i / 4 - 0.5;
+          ctx.beginPath();
+          ctx.moveTo(laneXbottom(frac), g.H);
+          ctx.lineTo(VPx, VPy);
+          ctx.lineWidth = (i === 0 || i === 4) ? 2 : 1;
+          ctx.strokeStyle = hexA("#4a4d55", 0.9);
+          ctx.stroke();
+        }
       }
 
       drawStrike(ctx, g);
 
-      // notes: kicks first, then lane notes on top (both far-to-near)
-      function drawVisibleNotes(list) {
-        for (const n of sortByTimeFarToNear(list)) {
+      if (isChord) {
+        for (const n of sortByTimeFarToNear(chordNotes)) {
           const dt = n.t - songPos;
           if (dt <= -0.24 || dt > g.L + 0.05) continue;
           const s = sFor(dt, g);
           const y = yFor(s, g);
-          drawNote(ctx, n, s, y, g, dt <= 0);
+          const crossed = dt <= 0;
+          drawChordBar(ctx, n, s, y, g, crossed, !crossed, P);
         }
-      }
-      const all = P.chart.notes;
-      drawVisibleNotes(all.filter(isKickNote));
-      drawVisibleNotes(all.filter(function (n) { return !isKickNote(n); }));
-
-      // hover ghost (editor)
-      if (P.mode === "edit" && hoverRef.current) {
-        const h = hoverRef.current;
-        const dt = h.t - songPos;
-        if (dt > -0.24 && dt <= g.L + 0.05) {
-          // subtle lane column highlight — same projection as the highway lanes
-          if (h.lane >= 0) {
-            const i = h.lane;
-            ctx.beginPath();
-            ctx.moveTo(laneXbottom(i / 4 - 0.5), g.H);
-            ctx.lineTo(laneXbottom((i + 1) / 4 - 0.5), g.H);
-            ctx.lineTo(VPx, VPy);
-            ctx.closePath();
-            ctx.fillStyle = hexA(LANE_COLORS[i], 0.10);
-            ctx.fill();
+        const active = activeChordAt(songPos, chordNotes);
+        if (active) {
+          drawStickyChordLabel(ctx, g, chordLabel(active, P.chart, P.showChordNames));
+        }
+        if (P.mode === "edit" && P.chordHoverT != null) {
+          const dt = P.chordHoverT - songPos;
+          if (dt > -0.24 && dt <= g.L + 0.05) {
+            const s = sFor(dt, g);
+            const y = yFor(s, g);
+            ctx.save();
+            ctx.globalAlpha = 0.35;
+            ctx.setLineDash([5, 4]);
+            drawChordBar(ctx, { nashville: "?" }, s, y, g, false, false, P);
+            ctx.restore();
           }
-          const s = sFor(dt, g);
-          const y = yFor(s, g);
-          ctx.save();
-          ctx.globalAlpha = 0.4;
-          ctx.setLineDash([5, 4]);
-          drawNote(ctx, h, s, y, g);
-          ctx.restore();
+        }
+      } else {
+        function drawVisibleNotes(list) {
+          for (const n of sortByTimeFarToNear(list)) {
+            const dt = n.t - songPos;
+            if (dt <= -0.24 || dt > g.L + 0.05) continue;
+            const s = sFor(dt, g);
+            const y = yFor(s, g);
+            drawNote(ctx, n, s, y, g, dt <= 0);
+          }
+        }
+        const all = P.chart.notes;
+        drawVisibleNotes(all.filter(isKickNote));
+        drawVisibleNotes(all.filter(function (n) { return !isKickNote(n); }));
+
+        if (P.mode === "edit" && hoverRef.current) {
+          const h = hoverRef.current;
+          const dt = h.t - songPos;
+          if (dt > -0.24 && dt <= g.L + 0.05) {
+            if (h.lane >= 0) {
+              const i = h.lane;
+              ctx.beginPath();
+              ctx.moveTo(laneXbottom(i / 4 - 0.5), g.H);
+              ctx.lineTo(laneXbottom((i + 1) / 4 - 0.5), g.H);
+              ctx.lineTo(VPx, VPy);
+              ctx.closePath();
+              ctx.fillStyle = hexA(LANE_COLORS[i], 0.10);
+              ctx.fill();
+            }
+            const s = sFor(dt, g);
+            const y = yFor(s, g);
+            ctx.save();
+            ctx.globalAlpha = 0.4;
+            ctx.setLineDash([5, 4]);
+            drawNote(ctx, h, s, y, g);
+            ctx.restore();
+          }
         }
       }
 
@@ -259,6 +322,53 @@ const GREY = "#3a3b41";
 
       // edit playhead label handled by overlay DOM
       rafRef.current = requestAnimationFrame(draw);
+    }
+
+    function drawChordBar(ctx, n, s, y, g, crossed, showLabel, P) {
+      const lx = g.cx - 0.5 * g.Wfull * s, w = g.Wfull * s;
+      const h = Math.max(10, 22 * s);
+      const color = crossed ? GREY : CHORD_COLOR;
+      ctx.save();
+      ctx.shadowColor = hexA(color, crossed ? 0.15 : 0.45);
+      ctx.shadowBlur = 10 * s;
+      roundRect(ctx, lx, y - h / 2, w, h, h / 2);
+      ctx.fillStyle = color;
+      ctx.fill();
+      ctx.restore();
+      if (showLabel && n.nashville) {
+        const label = chordLabel(n, P.chart, P.showChordNames);
+        const fontSize = Math.max(36, 80 * s);
+        ctx.save();
+        ctx.font = "700 " + fontSize + "px IBM Plex Sans, system-ui, sans-serif";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillStyle = "#ffffff";
+        ctx.shadowColor = "rgba(0,0,0,.35)";
+        ctx.shadowBlur = 4;
+        ctx.fillText(label, g.cx, y);
+        ctx.restore();
+      }
+    }
+
+    function drawStickyChordLabel(ctx, g, label) {
+      const y = g.strikeY;
+      const lx = g.cx - 0.5 * g.Wfull;
+      const w = g.Wfull;
+      const h = 36;
+      ctx.save();
+      roundRect(ctx, lx, y - h / 2, w, h, 8);
+      ctx.fillStyle = CHORD_COLOR;
+      ctx.shadowColor = hexA(CHORD_COLOR, 0.5);
+      ctx.shadowBlur = 14;
+      ctx.fill();
+      ctx.font = "700 72px IBM Plex Sans, system-ui, sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillStyle = "#ffffff";
+      ctx.shadowColor = "rgba(0,0,0,.35)";
+      ctx.shadowBlur = 6;
+      ctx.fillText(label, g.cx, y);
+      ctx.restore();
     }
 
     function drawStrike(ctx, g) {
@@ -324,6 +434,15 @@ const GREY = "#3a3b41";
 
     function drawFlash(ctx, f, age, g) {
       const alpha = (1 - age) * 0.8;
+      if (f.kind === "chord") {
+        const lx = g.cx - 0.5 * g.Wfull, w = g.Wfull;
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.fillStyle = hexA(CHORD_COLOR, 0.55);
+        ctx.fillRect(lx, g.strikeY - 14, w, 28);
+        ctx.restore();
+        return;
+      }
       if (f.lane === -1 || f.kind === "kick") {
         const lx = g.cx - 0.5 * g.Wfull, w = g.Wfull;
         ctx.save();
@@ -386,6 +505,27 @@ const GREY = "#3a3b41";
       const mx = e.clientX - rect.left, my = e.clientY - rect.top;
       const songPos = P.getSongPos();
 
+      if (P.chartType === "chord") {
+        let hit = null, hitD = 1e9;
+        for (const n of (P.chart.chordNotes || [])) {
+          const dt = n.t - songPos;
+          if (dt <= -0.24 || dt > g.L + 0.05) continue;
+          const s = sFor(dt, g);
+          const y = yFor(s, g);
+          if (Math.abs(my - y) < Math.max(12, 14 * s)) {
+            const d = Math.abs(my - y);
+            if (d < hitD) { hitD = d; hit = n; }
+          }
+        }
+        if (hit) { P.onChordEdit(hit); return; }
+        let t = screenToTime(mx, my, g, songPos);
+        if (t < 0) return;
+        if (P.snapEnabled) t = snapTime(t, DAStore.secPerBeat(P.chart), P.chart.offset, P.snapDiv);
+        if (t < 0) t = 0;
+        P.onChordPlace(t);
+        return;
+      }
+
       // hit test existing notes -> remove (lane notes before kicks when stacked)
       let hit = null, hitD = 1e9;
       function testNote(n) {
@@ -438,6 +578,13 @@ const GREY = "#3a3b41";
       const rect = canvasRef.current.getBoundingClientRect();
       const mx = e.clientX - rect.left, my = e.clientY - rect.top;
       const songPos = P.getSongPos();
+      if (P.chartType === "chord") {
+        let t = screenToTime(mx, my, g, songPos);
+        if (t < 0) { if (P.onChordHover) P.onChordHover(null); return; }
+        if (P.snapEnabled) t = snapTime(t, DAStore.secPerBeat(P.chart), P.chart.offset, P.snapDiv);
+        if (P.onChordHover) P.onChordHover(Math.max(0, t));
+        return;
+      }
       const sc = screenToChart(mx, my, g, songPos);
       let t = sc.t;
       if (t < 0) { hoverRef.current = null; return; }
@@ -446,7 +593,10 @@ const GREY = "#3a3b41";
       const pl = resolvePlacement(sc.lane, P.tool);
       hoverRef.current = { t: t, lane: pl.lane, kind: pl.kind };
     }
-    function onPointerLeave() { hoverRef.current = null; }
+    function onPointerLeave() {
+      hoverRef.current = null;
+      if (propsRef.current.onChordHover) propsRef.current.onChordHover(null);
+    }
 
     function onWheel(e) {
       const P = propsRef.current;

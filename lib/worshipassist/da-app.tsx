@@ -5,7 +5,7 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
 import { DAStore as S } from "./da-store";
 import { DAAudio as A } from "./da-audio";
-import { HighwayCanvas, DA_LANE_COLORS as LANE_COLORS, DA_KICK_COLOR as KICK_COLOR } from "./da-highway";
+import { HighwayCanvas, DA_LANE_COLORS as LANE_COLORS, DA_KICK_COLOR as KICK_COLOR, DA_CHORD_COLOR as CHORD_COLOR } from "./da-highway";
 import { SidePanel } from "./da-side";
 
   const SNAP_OPTS = [
@@ -76,6 +76,11 @@ import { SidePanel } from "./da-side";
     const [loopOn, setLoopOn] = useState(!!ui0.loopOn);
     const [loopA, setLoopA] = useState(ui0.loopA != null ? ui0.loopA : null);
     const [loopB, setLoopB] = useState(ui0.loopB != null ? ui0.loopB : null);
+    const [chartType, setChartType] = useState(ui0.chartType || "drum");
+    const [showChordNames, setShowChordNames] = useState(!!ui0.showChordNames);
+    const [chordEdit, setChordEdit] = useState(null);
+    const [chordHoverT, setChordHoverT] = useState(null);
+    const [mobileOptsOpen, setMobileOptsOpen] = useState(false);
 
     const [hasAudio, setHasAudio] = useState(false);
     const [playing, setPlaying] = useState(false);
@@ -90,7 +95,7 @@ import { SidePanel } from "./da-side";
     const chartRef = useRef(chart);
     chartRef.current = chart;
     const stateRef = useRef({});
-    stateRef.current = { rate, loopOn, loopA, loopB, metro, playing, snapDiv, snapEnabled };
+    stateRef.current = { rate, loopOn, loopA, loopB, metro, playing, snapDiv, snapEnabled, chartType };
 
     // mobile layout: player only below 1440px
     useEffect(function () {
@@ -130,8 +135,8 @@ import { SidePanel } from "./da-side";
       setCharts(S.listCharts());
     }, [chart, ready]);
     useEffect(function () {
-      S.saveUI({ mode, tool, snapEnabled, snapDiv, spacing, rate, countInOn, metro, loopOn, loopA, loopB, keymap, keyEntry });
-    }, [mode, tool, snapEnabled, snapDiv, spacing, rate, countInOn, metro, loopOn, loopA, loopB, keymap, keyEntry]);
+      S.saveUI({ mode, tool, snapEnabled, snapDiv, spacing, rate, countInOn, metro, loopOn, loopA, loopB, keymap, keyEntry, chartType, showChordNames });
+    }, [mode, tool, snapEnabled, snapDiv, spacing, rate, countInOn, metro, loopOn, loopA, loopB, keymap, keyEntry, chartType, showChordNames]);
 
     // ---- audio loading ----
     const afterAudioReady = useCallback(function (dur) {
@@ -185,6 +190,7 @@ import { SidePanel } from "./da-side";
       posRef.current = 0;
       setLoopA(null); setLoopB(null); setLoopOn(false);
       setHasAudio(false); peaksRef.current = null;
+      setChordEdit(null); setChordHoverT(null);
     }
     function openChart(id) {
       if (id === chartRef.current.id && hasAudio) { setChartsOpen(false); return; }
@@ -359,6 +365,46 @@ import { SidePanel } from "./da-side";
     function clearNotes() {
       if (confirm("Clear all notes from this chart?")) setChart(function (c) { return Object.assign({}, c, { notes: [] }); });
     }
+    function clearChordNotes() {
+      if (confirm("Clear all chords from this chart?")) setChart(function (c) { return Object.assign({}, c, { chordNotes: [] }); });
+    }
+
+    function saveChordEdit() {
+      if (!chordEdit) return;
+      const edit = chordEdit;
+      setChart(function (c) {
+        const chordNotes = (c.chordNotes || []).slice();
+        if (edit.isNew) {
+          chordNotes.push({ id: edit.id, t: edit.t, nashville: edit.nashville });
+        } else {
+          for (let i = 0; i < chordNotes.length; i++) {
+            if (chordNotes[i].id === edit.id) {
+              chordNotes[i] = { id: edit.id, t: edit.t, nashville: edit.nashville };
+              break;
+            }
+          }
+        }
+        return Object.assign({}, c, { chordNotes: chordNotes });
+      });
+      setChordEdit(null);
+    }
+    function deleteChordEdit() {
+      if (!chordEdit || chordEdit.isNew) { setChordEdit(null); return; }
+      const id = chordEdit.id;
+      setChart(function (c) {
+        return Object.assign({}, c, { chordNotes: (c.chordNotes || []).filter(function (n) { return n.id !== id; }) });
+      });
+      setChordEdit(null);
+    }
+    function cancelChordEdit() {
+      setChordEdit(null);
+    }
+    function onChordPlace(t) {
+      setChordEdit({ id: S.uid(), t: t, nashville: "1", isNew: true });
+    }
+    function onChordEdit(n) {
+      setChordEdit({ id: n.id, t: n.t, nashville: n.nashville || "1", isNew: false });
+    }
 
     function patchChart(patch) { setChart(function (c) { return Object.assign({}, c, patch); }); }
     function cycleTool() {
@@ -451,25 +497,37 @@ import { SidePanel } from "./da-side";
       ctx.clearRect(0, 0, W, H);
       ctx.fillStyle = "#16171a"; ctx.fillRect(0, 0, W, H);
       const c = chartRef.current;
+      const st = stateRef.current;
       const dur = c.duration || 0;
-      // 5 rows: snare, yellow, blue, green, kick
-      const rows = 5;
+      const ct = st.chartType || "drum";
+      const isChord = ct === "chord";
       const pad = 3;
-      const rh = (H - pad * 2) / rows;
       const colors = [LANE_COLORS[0], LANE_COLORS[1], LANE_COLORS[2], LANE_COLORS[3], KICK_COLOR];
-      // row backgrounds + bar lines
-      for (let r = 0; r < rows; r++) {
-        const y = pad + r * rh;
-        ctx.fillStyle = (r % 2 === 0) ? "rgba(255,255,255,.02)" : "rgba(255,255,255,.035)";
-        ctx.fillRect(0, y, W, rh - 1);
+
+      if (isChord) {
+        ctx.fillStyle = "rgba(168,46,36,.08)";
+        ctx.fillRect(0, pad, W, H - pad * 2);
+      } else {
+        const rows = 5;
+        const rh = (H - pad * 2) / rows;
+        for (let r = 0; r < rows; r++) {
+          const y = pad + r * rh;
+          ctx.fillStyle = (r % 2 === 0) ? "rgba(255,255,255,.02)" : "rgba(255,255,255,.035)";
+          ctx.fillRect(0, y, W, rh - 1);
+        }
       }
+
       if (!dur) {
         ctx.fillStyle = "#6d727b"; ctx.font = "11px 'IBM Plex Mono', monospace";
         ctx.textAlign = "center"; ctx.textBaseline = "middle";
-        ctx.fillText("overview — load an audio file & add notes", W / 2, H / 2);
+        ctx.fillText(
+          isChord ? "chord overview — load audio & add chords" : "drum overview — load audio & add notes",
+          W / 2, H / 2
+        );
         ctx.textAlign = "start";
         return;
       }
+
       // bar lines
       const spb = S.secPerBeat(c);
       if (spb > 0) {
@@ -484,18 +542,26 @@ import { SidePanel } from "./da-side";
         }
       }
       // loop region
-      if (loopOn && loopA != null && loopB != null) {
-        const xa = (loopA / dur) * W, xb = (loopB / dur) * W;
+      if (st.loopOn && st.loopA != null && st.loopB != null) {
+        const xa = (st.loopA / dur) * W, xb = (st.loopB / dur) * W;
         ctx.fillStyle = "rgba(54,198,218,.10)";
         ctx.fillRect(xa, 0, xb - xa, H);
       }
-      // notes
-      for (const n of c.notes) {
+
+      const notes = isChord ? (c.chordNotes || []) : c.notes;
+      for (const n of notes) {
         const x = (n.t / dur) * W;
-        const row = (n.lane === -1 || n.kind === "kick") ? 4 : n.lane;
-        const y = pad + row * rh;
-        ctx.fillStyle = colors[row];
-        ctx.fillRect(x - 1, y + 1, 2, rh - 3);
+        if (isChord) {
+          ctx.fillStyle = CHORD_COLOR;
+          ctx.fillRect(x - 2, pad + 2, 4, H - pad * 2 - 4);
+        } else {
+          const rows = 5;
+          const rh = (H - pad * 2) / rows;
+          const row = (n.lane === -1 || n.kind === "kick") ? 4 : n.lane;
+          const y = pad + row * rh;
+          ctx.fillStyle = colors[row];
+          ctx.fillRect(x - 1, y + 1, 2, rh - 3);
+        }
       }
       // current view window (portion shown on the highway)
       const pos = getSongPos();
@@ -649,7 +715,9 @@ import { SidePanel } from "./da-side";
         React.createElement("div", { className: "stage" },
           React.createElement(HighwayCanvas, {
             chart: chart, mode: activeMode, tool: tool, snapEnabled: snapEnabled, snapDiv: snapDiv,
+            chartType: chartType, showChordNames: showChordNames, chordHoverT: chordHoverT,
             getSongPos: getSongPos, onAddNote: addNote, onRemoveNote: removeNote,
+            onChordPlace: onChordPlace, onChordEdit: onChordEdit, onChordHover: setChordHoverT,
             onScrub: isMobile ? scrubTransport : scrubEdit,
             allowScrub: isMobile,
             scrollSeconds: 3.7 - (spacing - 1) * (3.7 - 1.3) / 9
@@ -660,7 +728,8 @@ import { SidePanel } from "./da-side";
             React.createElement("div", { className: "pill" }, React.createElement("b", null, S.tsNum(chart) + "/" + S.tsDen(chart))),
             React.createElement("div", { className: "pill" }, React.createElement("span", { className: "cy" }, activeMode === "edit" ? "EDIT" : "PLAY")),
             activeMode === "edit" ? React.createElement("div", { className: "pill" }, "Bar ", React.createElement("b", null, bar > 0 ? bar : "—")) : null,
-            activeMode === "edit" ? React.createElement("button", {
+            chartType === "chord" ? React.createElement("div", { className: "pill" }, "Key ", React.createElement("b", null, chart.songKey || "C")) : null,
+            activeMode === "edit" && chartType !== "chord" ? React.createElement("button", {
               className: "hud-tool-cycle",
               onClick: cycleTool,
               title: "Cycle note tool (Tom → Cymbal → Kick)"
@@ -689,8 +758,47 @@ import { SidePanel } from "./da-side";
                 React.createElement("span", { className: "sep" }, " / "),
                 React.createElement("span", { className: "dim" }, fmtTime(chart.duration)),
                 React.createElement("span", { className: "mobile-bar" }, bar > 0 ? (bar + "." + beat) : "—.—")
-              )
+              ),
+              React.createElement("button", {
+                className: "btn icon ghost mobile-opts-btn",
+                title: "Chart & playback options",
+                onClick: function () { setMobileOptsOpen(!mobileOptsOpen); }
+              }, mobileOptsOpen ? "▾" : "⚙")
             ),
+            mobileOptsOpen ? React.createElement("div", { className: "mobile-opts-panel" },
+              React.createElement("div", { className: "mobile-opts-row" },
+                React.createElement("span", { className: "mobile-opts-label" }, "Chart"),
+                React.createElement("div", { className: "seg side-seg" },
+                  React.createElement("button", { className: chartType === "drum" ? "on" : "", onClick: function () { setChartType("drum"); } }, "Drum"),
+                  React.createElement("button", { className: chartType === "chord" ? "on" : "", onClick: function () { setChartType("chord"); } }, "Chord")
+                )
+              ),
+              React.createElement("div", { className: "mobile-opts-row" },
+                React.createElement("span", { className: "mobile-opts-label" }, "Show as"),
+                React.createElement("div", { className: "seg side-seg" },
+                  React.createElement("button", { className: !showChordNames ? "on" : "", onClick: function () { setShowChordNames(false); } }, "Numbers"),
+                  React.createElement("button", { className: showChordNames ? "on" : "", onClick: function () { setShowChordNames(true); } }, "Chords")
+                )
+              ),
+              React.createElement("div", { className: "mobile-opts-row" },
+                React.createElement("span", { className: "mobile-opts-label" }, "Count-in"),
+                React.createElement("div", { className: "switch" + (countInOn ? " on" : ""), onClick: function () { setCountInOn(!countInOn); } })
+              ),
+              React.createElement("div", { className: "mobile-opts-row" },
+                React.createElement("span", { className: "mobile-opts-label" }, "Metronome"),
+                React.createElement("div", { className: "switch" + (metro ? " on" : ""), onClick: function () { setMetro(!metro); } })
+              ),
+              React.createElement("div", { className: "mobile-opts-row" },
+                React.createElement("span", { className: "mobile-opts-label" }, "Loop"),
+                React.createElement("div", {
+                  className: "switch" + (loopOn ? " on" : ""),
+                  onClick: function () { if (loopA != null && loopB != null) setLoopOn(!loopOn); }
+                })
+              ),
+              loopA != null && loopB != null ? React.createElement("div", { className: "mobile-opts-hint" },
+                "Loop ", fmtTime(loopA), " – ", fmtTime(loopB)
+              ) : null
+            ) : null,
             React.createElement("div", { className: "mobile-controls-speed" },
               React.createElement("span", { className: "tlabel" }, "Speed"),
               React.createElement("input", { type: "range", min: 0.5, max: 1.5, step: 0.05, value: rate, onChange: function (e) { setRateSafe(parseFloat(e.target.value)); } }),
@@ -701,12 +809,14 @@ import { SidePanel } from "./da-side";
         // side panel
         !isMobile ? React.createElement(SidePanel, {
           mode: activeMode, chart: chart, patchChart: patchChart, tool: tool, setTool: setTool,
+          chartType: chartType, setChartType: setChartType, showChordNames: showChordNames, setShowChordNames: setShowChordNames,
+          chordEdit: chordEdit, setChordEdit: setChordEdit, saveChordEdit: saveChordEdit, cancelChordEdit: cancelChordEdit, deleteChordEdit: deleteChordEdit,
           snapEnabled: snapEnabled, setSnapEnabled: setSnapEnabled, snapDiv: snapDiv, setSnapDiv: setSnapDiv,
           spacing: spacing, setSpacing: setSpacing,
           keyEntry: keyEntry, setKeyEntry: setKeyEntry, keymap: keymap, listenAction: listenAction,
           startListen: function (a) { setListenAction(a); }, clearListen: function () { setListenAction(null); },
           resetKeymap: function () { setKeymap(Object.assign({}, S.DEFAULT_KEYMAP)); },
-          clearNotes: clearNotes, openFile: function () { fileRef.current.click(); }, hasAudio: hasAudio,
+          clearNotes: clearNotes, clearChordNotes: clearChordNotes, openFile: function () { fileRef.current.click(); }, hasAudio: hasAudio,
           rate: rate, setRate: setRateSafe, countInOn: countInOn, setCountInOn: setCountInOn,
           metro: metro, setMetro: setMetro,
           loopOn: loopOn, setLoopOn: setLoopOn, loopA: loopA, loopB: loopB,
@@ -718,7 +828,8 @@ import { SidePanel } from "./da-side";
       // transport (desktop only)
       !isMobile ? React.createElement("div", { className: "transport" },
         React.createElement("div", { className: "overview-row" },
-          React.createElement("span", { className: "overview-label" }, "OVERVIEW"),
+          React.createElement("span", { className: "overview-label" },
+            chartType === "chord" ? "CHORDS" : "DRUMS"),
           React.createElement("canvas", { className: "mini-canvas", ref: miniRef, onPointerDown: onMiniDown })
         ),
         React.createElement("div", { className: "wave-row" },

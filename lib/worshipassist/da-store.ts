@@ -35,11 +35,12 @@ const OLD_LIB_KEY = "drumassist.library.v1";
 
   function defaultChart() {
     return {
-      version: 2,
+      version: 3,
       id: uid(),
       name: "Untitled chart",
       audioName: null,
       audioPath: null,
+      songKey: "C",
       bpm: 120,
       offset: 0,
       beatsPerBar: 4,
@@ -47,6 +48,7 @@ const OLD_LIB_KEY = "drumassist.library.v1";
       tsDen: 4,
       duration: 0,
       notes: [],
+      chordNotes: [],
       updatedAt: Date.now()
     };
   }
@@ -56,7 +58,9 @@ const OLD_LIB_KEY = "drumassist.library.v1";
       id: c.id, name: c.name, bpm: c.bpm,
       tsNum: c.tsNum || c.beatsPerBar || 4, tsDen: c.tsDen || 4,
       duration: c.duration || 0, audioName: c.audioName || null,
-      noteCount: (c.notes || []).length, updatedAt: c.updatedAt || Date.now()
+      noteCount: (c.notes || []).length,
+      chordNoteCount: (c.chordNotes || []).length,
+      updatedAt: c.updatedAt || Date.now()
     };
   }
 

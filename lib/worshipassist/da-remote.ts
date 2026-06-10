@@ -23,6 +23,8 @@ function rowToChart(row) {
     tsDen: row.ts_den,
     duration: row.duration,
     notes: row.notes || [],
+    songKey: row.song_key || "C",
+    chordNotes: row.chord_notes || [],
     updatedAt: new Date(row.updated_at).getTime(),
   };
 }
@@ -44,6 +46,8 @@ function chartToRow(chart) {
     audio_name: chart.audioName,
     audio_path: path,
     notes: chart.notes || [],
+    song_key: chart.songKey || "C",
+    chord_notes: chart.chordNotes || [],
     updated_at: new Date(chart.updatedAt || Date.now()).toISOString(),
   };
 }
