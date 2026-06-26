@@ -148,7 +148,7 @@ import { SidePanel } from "./da-side";
     async function handleFile(file) {
       try {
         const res = await A.loadFile(file);
-        posRef.current = 0;
+        posRef.current = S.chartStart(chartRef.current);
         setPlaying(false);
         afterAudioReady(res.duration);
         setChart(function (c) { return Object.assign({}, c, { audioName: file.name, duration: res.duration }); });
@@ -174,6 +174,16 @@ import { SidePanel } from "./da-side";
       return function () { dead = true; };
     }, [afterAudioReady, ready, chart && chart.id]);
 
+    useEffect(function () {
+      if (!chart) return;
+      const start = S.chartStart(chart);
+      if (posRef.current < start) {
+        posRef.current = start;
+        if (!A.isPlaying()) A.seek(start);
+        setTick(function (t) { return t + 1; });
+      }
+    }, [chart && chart.chartStart, chart && chart.id]);
+
     function getSongPos() {
       return A.isPlaying() ? A.getPosition() : posRef.current;
     }
@@ -185,9 +195,10 @@ import { SidePanel } from "./da-side";
         if (rec) { try { const res = await A.loadArrayBuffer(rec.data); afterAudioReady(res.duration); } catch (e) {} }
       })();
     }
-    function resetTransportForChart() {
+    function resetTransportForChart(nextChart) {
       A.stop(); setPlaying(false);
-      posRef.current = 0;
+      const c = nextChart || chartRef.current;
+      posRef.current = S.chartStart(c);
       setLoopA(null); setLoopB(null); setLoopOn(false);
       setHasAudio(false); peaksRef.current = null;
       setChordEdit(null); setChordHoverT(null);
@@ -196,7 +207,7 @@ import { SidePanel } from "./da-side";
       if (id === chartRef.current.id && hasAudio) { setChartsOpen(false); return; }
       const c = S.loadChartById(id);
       if (!c) return;
-      resetTransportForChart();
+      resetTransportForChart(c);
       S.setCurrentId(id);
       setChart(c);
       setChartsOpen(false);
@@ -306,10 +317,14 @@ import { SidePanel } from "./da-side";
         await A.resume();
         A.setRate(stateRef.current.rate);
         metroBeatRef.current = -1;
-        let from = posRef.current;
-        if (loopOn && loopA != null && (from < loopA || (loopB != null && from >= loopB))) from = loopA;
+        let from = S.clampSongPos(chart, posRef.current);
+        const start = S.chartStart(chart);
+        if (loopOn && loopA != null && (from < loopA || (loopB != null && from >= loopB))) {
+          from = S.clampSongPos(chart, loopA);
+        }
         if (countInOn) {
-          await A.countInAndPlay(S.tsNum(chart), S.secPerBeat(chart), from);
+          await A.countInAndPlay(S.tsNum(chart), S.secPerBeat(chart), start);
+          posRef.current = start;
         } else {
           await A.play(from);
         }
@@ -318,7 +333,9 @@ import { SidePanel } from "./da-side";
     }
     function stopToStart() {
       A.stop();
-      const to = (loopOn && loopA != null) ? loopA : 0;
+      const c = chartRef.current;
+      const start = S.chartStart(c);
+      const to = (loopOn && loopA != null && loopA >= start) ? loopA : start;
       posRef.current = to;
       A.seek(to);
       setPlaying(false);
@@ -326,7 +343,7 @@ import { SidePanel } from "./da-side";
     }
 
     function seekTo(t) {
-      t = Math.max(0, Math.min(t, chart.duration || 0));
+      t = S.clampSongPos(chartRef.current, t);
       posRef.current = t;
       if (A.isPlaying()) { metroBeatRef.current = -1; A.seek(t); }
       setTick(function (x) { return x + 1; });
@@ -337,7 +354,7 @@ import { SidePanel } from "./da-side";
       setTick(function (x) { return x + 1; });
     }
     function scrubTransport(t) {
-      t = Math.max(0, Math.min(t, chartRef.current.duration || 0));
+      t = S.clampSongPos(chartRef.current, t);
       posRef.current = t;
       if (A.isPlaying()) { metroBeatRef.current = -1; A.seek(t); }
       setTick(function (x) { return x + 1; });
@@ -406,7 +423,31 @@ import { SidePanel } from "./da-side";
       setChordEdit({ id: n.id, t: n.t, nashville: n.nashville || "1", isNew: false });
     }
 
-    function patchChart(patch) { setChart(function (c) { return Object.assign({}, c, patch); }); }
+    function patchChart(patch) {
+      setChart(function (c) {
+        let nextPatch = Object.assign({}, patch);
+        if (nextPatch.chartStart != null) {
+          const dur = c.duration || 0;
+          nextPatch.chartStart = Math.max(0, dur > 0 ? Math.min(nextPatch.chartStart, dur) : nextPatch.chartStart);
+        }
+        if (nextPatch.offset != null && nextPatch.offset !== c.offset) {
+          const newOffset = Math.max(0, nextPatch.offset);
+          const delta = newOffset - c.offset;
+          if (delta !== 0) {
+            return Object.assign({}, c, nextPatch, {
+              offset: newOffset,
+              notes: (c.notes || []).map(function (n) {
+                return Object.assign({}, n, { t: Math.max(0, n.t + delta) });
+              }),
+              chordNotes: (c.chordNotes || []).map(function (n) {
+                return Object.assign({}, n, { t: Math.max(0, n.t + delta) });
+              }),
+            });
+          }
+        }
+        return Object.assign({}, c, nextPatch);
+      });
+    }
     function cycleTool() {
       setTool(function (t) {
         const i = TOOL_CYCLE.indexOf(t);
@@ -465,7 +506,7 @@ import { SidePanel } from "./da-side";
           ctx.fillRect(x, isBar ? 0 : H * 0.3, 1, isBar ? H : H * 0.4);
         }
       }
-      // offset handle
+      // offset handle (first downbeat)
       const ox = (c.offset / dur) * W;
       ctx.fillStyle = "#e8c020";
       ctx.beginPath();
@@ -473,6 +514,19 @@ import { SidePanel } from "./da-side";
       ctx.closePath(); ctx.fill();
       ctx.strokeStyle = "rgba(232,192,32,.6)"; ctx.lineWidth = 1;
       ctx.beginPath(); ctx.moveTo(ox, 0); ctx.lineTo(ox, H); ctx.stroke();
+      // chart start handle
+      const cs = S.chartStart(c);
+      const sx = (cs / dur) * W;
+      ctx.fillStyle = "#36c6da";
+      ctx.beginPath();
+      ctx.moveTo(sx, H); ctx.lineTo(sx - 6, H); ctx.lineTo(sx, H - 10); ctx.lineTo(sx + 6, H);
+      ctx.closePath(); ctx.fill();
+      ctx.strokeStyle = "rgba(54,198,218,.55)"; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(sx, 0); ctx.lineTo(sx, H); ctx.stroke();
+      if (cs > 0) {
+        ctx.fillStyle = "rgba(0,0,0,.18)";
+        ctx.fillRect(0, 0, sx, H);
+      }
       // playhead
       const pos = getSongPos();
       const px = (pos / dur) * W;
@@ -526,6 +580,15 @@ import { SidePanel } from "./da-side";
         );
         ctx.textAlign = "start";
         return;
+      }
+
+      const chartStartT = S.chartStart(c);
+      if (chartStartT > 0) {
+        const sx = (chartStartT / dur) * W;
+        ctx.fillStyle = "rgba(0,0,0,.22)";
+        ctx.fillRect(0, pad, sx, H - pad * 2);
+        ctx.fillStyle = "rgba(54,198,218,.45)";
+        ctx.fillRect(sx, pad, 1, H - pad * 2);
       }
 
       // bar lines
@@ -601,11 +664,15 @@ import { SidePanel } from "./da-side";
       const dur = chartRef.current.duration || 0;
       if (!dur) return;
       const t = waveXToTime(e);
-      // grab offset handle if near top strip and near handle x
+      const x = e.clientX - rect.left;
       const ox = (chartRef.current.offset / dur) * rect.width;
-      if (y < 16 || Math.abs((e.clientX - rect.left) - ox) < 7) {
+      const sx = (S.chartStart(chartRef.current) / dur) * rect.width;
+      if (y < 16 || Math.abs(x - ox) < 7) {
         waveDragRef.current = "offset";
         patchChart({ offset: t });
+      } else if (y > rect.height - 16 || Math.abs(x - sx) < 7) {
+        waveDragRef.current = "chartStart";
+        patchChart({ chartStart: t });
       } else {
         waveDragRef.current = "seek";
         seekTo(t);
@@ -615,6 +682,7 @@ import { SidePanel } from "./da-side";
     }
     function onWaveMove(e) {
       if (waveDragRef.current === "offset") patchChart({ offset: waveXToTime(e) });
+      else if (waveDragRef.current === "chartStart") patchChart({ chartStart: waveXToTime(e) });
       else if (waveDragRef.current === "seek") seekTo(waveXToTime(e));
     }
     function onWaveUp() {

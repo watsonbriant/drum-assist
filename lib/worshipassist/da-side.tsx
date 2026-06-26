@@ -352,8 +352,15 @@ const KICK_COLOR = DA_KICK_COLOR;
       React.createElement(NumField, { label: "BPM", value: p.chart.bpm, step: 1, onChange: function (v) { if (v > 0) p.patchChart({ bpm: Math.round(v) }); }, onStep: function (d) { p.patchChart({ bpm: Math.max(20, p.chart.bpm + d) }); } }),
       KeyField(p),
       React.createElement(NumField, { label: "First beat (s)", value: +p.chart.offset.toFixed(3), step: 0.01, onChange: function (v) { p.patchChart({ offset: Math.max(0, v || 0) }); }, onStep: function (d) { p.patchChart({ offset: Math.max(0, +(p.chart.offset + d).toFixed(3)) }); } }),
+      React.createElement(NumField, {
+        label: "Chart start (s)", value: +(p.chart.chartStart || 0).toFixed(3), step: 0.01,
+        onChange: function (v) { p.patchChart({ chartStart: Math.max(0, v || 0) }); },
+        onStep: function (d) { p.patchChart({ chartStart: Math.max(0, +((p.chart.chartStart || 0) + d).toFixed(3)) }); }
+      }),
       React.createElement(TimeSigField, { chart: p.chart, patchChart: p.patchChart }),
-      p.mode === "edit" ? React.createElement("div", { className: "hint", style: { marginTop: 4 } }, "Tip: drag the yellow marker on the waveform to set the first downbeat.") : null
+      p.mode === "edit" ? React.createElement("div", { className: "hint", style: { marginTop: 4 } },
+        "Tip: drag the yellow marker on the waveform for the first downbeat. Drag the cyan marker at the bottom for chart start — playback and count-in begin there."
+      ) : null
     );
   }
 

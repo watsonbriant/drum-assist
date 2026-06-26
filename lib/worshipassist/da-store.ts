@@ -43,6 +43,7 @@ const OLD_LIB_KEY = "drumassist.library.v1";
       songKey: "C",
       bpm: 120,
       offset: 0,
+      chartStart: 0,
       beatsPerBar: 4,
       tsNum: 4,
       tsDen: 4,
@@ -369,11 +370,20 @@ const OLD_LIB_KEY = "drumassist.library.v1";
     return (((k % num) + num) % num) === 0;
   }
 
+  function chartStart(c) { return Math.max(0, c.chartStart ?? 0); }
+
+  function clampSongPos(c, t) {
+    const start = chartStart(c);
+    const dur = c.duration || 0;
+    if (dur > 0) return Math.max(start, Math.min(t, dur));
+    return Math.max(start, t);
+  }
+
 export const DAStore = {
   uid, defaultChart, newChart, duplicateChart, loadUI, saveUI,
   listCharts, loadChartById, saveChartToLibrary, deleteChartById,
   getCurrentId, setCurrentId, migrateFromDrumAssist, migrateLegacy, syncFromRemote,
   saveAudio, loadAudio, clearAudio, copyAudio, exportJSON, importJSON,
-  tsNum, tsDen, secPerBeat, isAccentBeat, isBarStart,
+  tsNum, tsDen, secPerBeat, isAccentBeat, isBarStart, chartStart, clampSongPos,
   DEFAULT_KEYMAP: DEFAULT_KEYMAP
 };

@@ -71,6 +71,14 @@ const CHORD_COLOR = DA_CHORD_COLOR;
     return active;
   }
 
+  function chartStartTime(chart) {
+    return chart.chartStart ?? 0;
+  }
+
+  function inChartRange(n, chart) {
+    return n.t >= chartStartTime(chart) - 0.001;
+  }
+
   export function HighwayCanvas(props: Record<string, unknown>) {
     const canvasRef = useRef(null);
     const wrapRef = useRef(null);
@@ -108,6 +116,17 @@ const CHORD_COLOR = DA_CHORD_COLOR;
     function sFor(dt, g) {
       const z = dt * g.speed;
       return 1 / (1 + z);
+    }
+    // Past notes where scale would go non-positive must be culled (depends on scroll speed).
+    function pastLimit(g) {
+      return Math.max(-0.24, -0.95 / g.speed);
+    }
+    function noteVisible(dt, g) {
+      return dt > pastLimit(g) && dt <= g.L + 0.05;
+    }
+    function safeScale(s) {
+      if (!isFinite(s) || s <= 0) return 0.12;
+      return s;
     }
     function yFor(s, g) {
       return g.strikeY - (g.strikeY - g.horizonY) * (1 - s);
@@ -148,7 +167,8 @@ const CHORD_COLOR = DA_CHORD_COLOR;
       const songPos = P.getSongPos();
 
       const isChord = P.chartType === "chord";
-      const chordNotes = P.chart.chordNotes || [];
+      const chordNotes = (P.chart.chordNotes || []).filter(function (n) { return inChartRange(n, P.chart); });
+      const drumNotes = P.chart.notes.filter(function (n) { return inChartRange(n, P.chart); });
 
       // detect crossings for flash (player + edit preview)
       const prev = lastPosRef.current;
@@ -160,7 +180,7 @@ const CHORD_COLOR = DA_CHORD_COLOR;
             }
           }
         } else {
-          for (const n of P.chart.notes) {
+          for (const n of drumNotes) {
             if (n.t > prev && n.t <= songPos) {
               flashesRef.current.push({ t0: performance.now(), lane: n.lane, kind: n.kind });
             }
@@ -216,7 +236,7 @@ const CHORD_COLOR = DA_CHORD_COLOR;
         const t = offset + k * step;
         if (t > endT) break;
         const dt = t - songPos;
-        if (dt <= -0.24) continue;
+        if (dt <= pastLimit(g)) continue;
         const s = sFor(dt, g);
         const y = yFor(s, g);
         const lx = g.cx - 0.5 * g.Wfull * s;
@@ -251,8 +271,8 @@ const CHORD_COLOR = DA_CHORD_COLOR;
       if (isChord) {
         for (const n of sortByTimeFarToNear(chordNotes)) {
           const dt = n.t - songPos;
-          if (dt <= -0.24 || dt > g.L + 0.05) continue;
-          const s = sFor(dt, g);
+          if (!noteVisible(dt, g)) continue;
+          const s = safeScale(sFor(dt, g));
           const y = yFor(s, g);
           const crossed = dt <= 0;
           drawChordBar(ctx, n, s, y, g, crossed, !crossed, P);
@@ -263,8 +283,8 @@ const CHORD_COLOR = DA_CHORD_COLOR;
         }
         if (P.mode === "edit" && P.chordHoverT != null) {
           const dt = P.chordHoverT - songPos;
-          if (dt > -0.24 && dt <= g.L + 0.05) {
-            const s = sFor(dt, g);
+          if (noteVisible(dt, g)) {
+            const s = safeScale(sFor(dt, g));
             const y = yFor(s, g);
             ctx.save();
             ctx.globalAlpha = 0.35;
@@ -277,20 +297,20 @@ const CHORD_COLOR = DA_CHORD_COLOR;
         function drawVisibleNotes(list) {
           for (const n of sortByTimeFarToNear(list)) {
             const dt = n.t - songPos;
-            if (dt <= -0.24 || dt > g.L + 0.05) continue;
-            const s = sFor(dt, g);
+            if (!noteVisible(dt, g)) continue;
+            const s = safeScale(sFor(dt, g));
             const y = yFor(s, g);
             drawNote(ctx, n, s, y, g, dt <= 0);
           }
         }
-        const all = P.chart.notes;
+        const all = drumNotes;
         drawVisibleNotes(all.filter(isKickNote));
         drawVisibleNotes(all.filter(function (n) { return !isKickNote(n); }));
 
         if (P.mode === "edit" && hoverRef.current) {
           const h = hoverRef.current;
           const dt = h.t - songPos;
-          if (dt > -0.24 && dt <= g.L + 0.05) {
+          if (noteVisible(dt, g)) {
             if (h.lane >= 0) {
               const i = h.lane;
               ctx.beginPath();
@@ -301,7 +321,7 @@ const CHORD_COLOR = DA_CHORD_COLOR;
               ctx.fillStyle = hexA(LANE_COLORS[i], 0.10);
               ctx.fill();
             }
-            const s = sFor(dt, g);
+            const s = safeScale(sFor(dt, g));
             const y = yFor(s, g);
             ctx.save();
             ctx.globalAlpha = 0.4;
@@ -325,6 +345,7 @@ const CHORD_COLOR = DA_CHORD_COLOR;
     }
 
     function drawChordBar(ctx, n, s, y, g, crossed, showLabel, P) {
+      s = safeScale(s);
       const lx = g.cx - 0.5 * g.Wfull * s, w = g.Wfull * s;
       const h = Math.max(10, 22 * s);
       const color = crossed ? GREY : CHORD_COLOR;
@@ -386,7 +407,8 @@ const CHORD_COLOR = DA_CHORD_COLOR;
     }
 
     function drawNote(ctx, n, s, y, g, crossed) {
-      const r = g.baseR * s;
+      s = safeScale(s);
+      const r = Math.max(1, g.baseR * s);
       const kickColor = crossed ? GREY : KICK_COLOR;
       if (n.lane === -1 || n.kind === "kick") {
         // kick bar across all lanes (drawn before lane notes so they stack on top)
@@ -504,13 +526,14 @@ const CHORD_COLOR = DA_CHORD_COLOR;
       const rect = canvasRef.current.getBoundingClientRect();
       const mx = e.clientX - rect.left, my = e.clientY - rect.top;
       const songPos = P.getSongPos();
+      const startT = chartStartTime(P.chart);
 
       if (P.chartType === "chord") {
         let hit = null, hitD = 1e9;
         for (const n of (P.chart.chordNotes || [])) {
           const dt = n.t - songPos;
-          if (dt <= -0.24 || dt > g.L + 0.05) continue;
-          const s = sFor(dt, g);
+          if (!noteVisible(dt, g)) continue;
+          const s = safeScale(sFor(dt, g));
           const y = yFor(s, g);
           if (Math.abs(my - y) < Math.max(12, 14 * s)) {
             const d = Math.abs(my - y);
@@ -519,9 +542,9 @@ const CHORD_COLOR = DA_CHORD_COLOR;
         }
         if (hit) { P.onChordEdit(hit); return; }
         let t = screenToTime(mx, my, g, songPos);
-        if (t < 0) return;
+        if (t < startT) return;
         if (P.snapEnabled) t = snapTime(t, DAStore.secPerBeat(P.chart), P.chart.offset, P.snapDiv);
-        if (t < 0) t = 0;
+        if (t < startT) t = startT;
         P.onChordPlace(t);
         return;
       }
@@ -530,7 +553,7 @@ const CHORD_COLOR = DA_CHORD_COLOR;
       let hit = null, hitD = 1e9;
       function testNote(n) {
         const dt = n.t - songPos;
-        if (dt <= -0.24 || dt > g.L + 0.05) return;
+        if (dt <= pastLimit(g) || dt > g.L + 0.05) return;
         const s = sFor(dt, g);
         const y = yFor(s, g);
         if (isKickNote(n)) {
@@ -551,9 +574,9 @@ const CHORD_COLOR = DA_CHORD_COLOR;
       // place new
       const sc = screenToChart(mx, my, g, songPos);
       let t = sc.t;
-      if (t < 0) return;
+      if (t < startT) return;
       if (P.snapEnabled) t = snapTime(t, DAStore.secPerBeat(P.chart), P.chart.offset, P.snapDiv);
-      if (t < 0) t = 0;
+      if (t < startT) t = startT;
       const pl = resolvePlacement(sc.lane, P.tool);
       P.onAddNote({ t: t, lane: pl.lane, kind: pl.kind });
     }
