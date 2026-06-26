@@ -55,6 +55,12 @@ import { SidePanel } from "./da-side";
     return (neg ? "-" : "") + m + ":" + String(s).padStart(2, "0") + "." + String(cs).padStart(2, "0");
   }
 
+  function fmtBpm(b) {
+    const n = Number(b) || 0;
+    if (Math.abs(n - Math.round(n)) < 0.001) return String(Math.round(n));
+    return String(+n.toFixed(2));
+  }
+
   export default function App() {
     const ui0 = S.loadUI();
     const [ready, setReady] = useState(false);
@@ -793,7 +799,7 @@ import { SidePanel } from "./da-side";
                   React.createElement("div", { className: "chart-row-main" },
                     React.createElement("div", { className: "chart-row-name" }, m.name),
                     React.createElement("div", { className: "chart-row-meta" },
-                      (m.audioName ? "♪ " : "○ ") + m.bpm + " BPM · " + m.tsNum + "/" + m.tsDen + " · " + m.noteCount + " notes")
+                      (m.audioName ? "♪ " : "○ ") + fmtBpm(m.bpm) + " BPM · " + m.tsNum + "/" + m.tsDen + " · " + m.noteCount + " notes")
                   ),
                   React.createElement("button", { className: "chart-del", title: "Delete", onClick: function (e) { e.stopPropagation(); deleteChartAction(m.id); } }, "✕")
                 );
@@ -821,7 +827,7 @@ import { SidePanel } from "./da-side";
           }),
           // HUD
           React.createElement("div", { className: "hud" },
-            React.createElement("div", { className: "pill" }, "BPM ", React.createElement("b", null, chart.bpm)),
+            React.createElement("div", { className: "pill" }, "BPM ", React.createElement("b", null, fmtBpm(chart.bpm))),
             React.createElement("div", { className: "pill" }, React.createElement("b", null, S.tsNum(chart) + "/" + S.tsDen(chart))),
             React.createElement("div", { className: "pill" }, React.createElement("span", { className: "cy" }, activeMode === "edit" ? "EDIT" : "PLAY")),
             activeMode === "edit" ? React.createElement("div", { className: "pill" }, "Bar ", React.createElement("b", null, bar > 0 ? bar : "—")) : null,

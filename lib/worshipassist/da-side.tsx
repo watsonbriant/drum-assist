@@ -349,7 +349,11 @@ const KICK_COLOR = DA_KICK_COLOR;
       React.createElement("h3", null, "Song"),
       React.createElement("button", { className: "btn", style: { width: "100%", justifyContent: "center", marginBottom: 12 }, onClick: p.openFile },
         p.hasAudio ? "Replace audio…" : "Load audio…"),
-      React.createElement(NumField, { label: "BPM", value: p.chart.bpm, step: 1, onChange: function (v) { if (v > 0) p.patchChart({ bpm: Math.round(v) }); }, onStep: function (d) { p.patchChart({ bpm: Math.max(20, p.chart.bpm + d) }); } }),
+      React.createElement(NumField, {
+        label: "BPM", value: +Number(p.chart.bpm || 120).toFixed(2), step: 0.01,
+        onChange: function (v) { if (v > 0) p.patchChart({ bpm: +Math.max(1, v).toFixed(2) }); },
+        onStep: function (d) { p.patchChart({ bpm: +Math.max(1, (p.chart.bpm + d)).toFixed(2) }); }
+      }),
       KeyField(p),
       React.createElement(NumField, { label: "First beat (s)", value: +p.chart.offset.toFixed(3), step: 0.01, onChange: function (v) { p.patchChart({ offset: Math.max(0, v || 0) }); }, onStep: function (d) { p.patchChart({ offset: Math.max(0, +(p.chart.offset + d).toFixed(3)) }); } }),
       React.createElement(NumField, {
