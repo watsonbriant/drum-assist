@@ -1,7 +1,8 @@
 // @ts-nocheck
 /* WorshipAssist — Chart store + persistence
- * Local cache: chart metadata + bodies in localStorage,
- * audio blobs in IndexedDB. Cloud sync via Supabase when configured.
+ * Cloud mode (Supabase configured): remote is source of truth; localStorage holds
+ * unsynced drafts only until upsert succeeds. Session cache holds synced charts.
+ * Offline mode: localStorage + IndexedDB only (legacy behavior).
  */
 
 import { DARemote } from "./da-remote";
@@ -19,11 +20,16 @@ const OLD_LIB_KEY = "drumassist.library.v1";
   const CUR_KEY = "worshipassist.currentId.v1";
   const UI_KEY = "worshipassist.ui.v1";
   const MIGRATED_KEY = "worshipassist.migrated.v1";
+  const DRAFT_LIB_KEY = "worshipassist.draft.library.v1";
+  const DRAFT_PREFIX = "worshipassist.draft.chart.";
   const DB_NAME = "worshipassist";
   const DB_STORE = "audio";
 
   let _id = 1;
   function uid() { return "c" + (Date.now().toString(36)) + (_id++).toString(36); }
+
+  /** Synced charts from Supabase (session cache — repopulated on each sync). */
+  let _syncedCharts = {};
 
   const DEFAULT_KEYMAP = {
     snare: "f",
@@ -71,30 +77,28 @@ const OLD_LIB_KEY = "drumassist.library.v1";
     return null;
   }
 
-  // ---- UI prefs ----
+  function isCloudMode() { return DARemote.isConfigured(); }
+
+  // ---- UI prefs (always localStorage) ----
   function loadUI() {
     try { const raw = localStorage.getItem(UI_KEY); return raw ? JSON.parse(raw) : {}; }
     catch (e) { return {}; }
   }
   function saveUI(ui) { try { localStorage.setItem(UI_KEY, JSON.stringify(ui)); } catch (e) {} }
 
-  // ---- Library (localStorage) ----
+  // ---- Legacy offline library (localStorage) ----
   function readIndex() {
     try { const raw = localStorage.getItem(LIB_KEY); return raw ? JSON.parse(raw) : []; }
     catch (e) { return []; }
   }
   function writeIndex(arr) { try { localStorage.setItem(LIB_KEY, JSON.stringify(arr)); } catch (e) {} }
 
-  function listCharts() {
-    return readIndex().slice().sort(function (a, b) { return (b.updatedAt || 0) - (a.updatedAt || 0); });
+  function readDraftIndex() {
+    try { const raw = localStorage.getItem(DRAFT_LIB_KEY); return raw ? JSON.parse(raw) : []; }
+    catch (e) { return []; }
   }
-
-  function loadChartById(id) {
-    try {
-      const raw = localStorage.getItem(CHART_PREFIX + id);
-      if (!raw) return null;
-      return Object.assign(defaultChart(), JSON.parse(raw));
-    } catch (e) { return null; }
+  function writeDraftIndex(arr) {
+    try { localStorage.setItem(DRAFT_LIB_KEY, JSON.stringify(arr)); } catch (e) {}
   }
 
   function saveChartToLibraryLocal(chart) {
@@ -108,40 +112,154 @@ const OLD_LIB_KEY = "drumassist.library.v1";
     return chart;
   }
 
-  const _syncTimers: Record<string, ReturnType<typeof setTimeout>> = {};
+  function removeLegacyLocalChart(id) {
+    try { localStorage.removeItem(CHART_PREFIX + id); } catch (e) {}
+    writeIndex(readIndex().filter(function (m) { return m.id !== id; }));
+  }
+
+  function saveDraft(chart) {
+    if (!chart.id) chart.id = uid();
+    chart.updatedAt = Date.now();
+    try { localStorage.setItem(DRAFT_PREFIX + chart.id, JSON.stringify(chart)); } catch (e) {}
+    const isNew = !_syncedCharts[chart.id];
+    const idx = readDraftIndex().filter(function (m) { return m.id !== chart.id; });
+    idx.push({ id: chart.id, isNew: isNew, updatedAt: chart.updatedAt });
+    writeDraftIndex(idx);
+    setCurrentId(chart.id);
+    return chart;
+  }
+
+  function loadDraftById(id) {
+    try {
+      const raw = localStorage.getItem(DRAFT_PREFIX + id);
+      if (!raw) return null;
+      return Object.assign(defaultChart(), JSON.parse(raw));
+    } catch (e) { return null; }
+  }
+
+  function clearDraft(id) {
+    try { localStorage.removeItem(DRAFT_PREFIX + id); } catch (e) {}
+    writeDraftIndex(readDraftIndex().filter(function (m) { return m.id !== id; }));
+  }
+
+  function chartHasDraft(id) {
+    if (!id || !isCloudMode()) return false;
+    return !!loadDraftById(id);
+  }
+
+  function purgeStaleLocalCharts(remoteIds) {
+    for (const m of readDraftIndex()) {
+      if (!remoteIds.has(m.id) && !m.isNew) clearDraft(m.id);
+    }
+
+    const draftIds = new Set(readDraftIndex().map(function (m) { return m.id; }));
+
+    for (const m of readIndex()) {
+      if (!remoteIds.has(m.id) && !draftIds.has(m.id)) {
+        try { localStorage.removeItem(CHART_PREFIX + m.id); } catch (e) {}
+      }
+    }
+    writeIndex(readIndex().filter(function (m) {
+      return remoteIds.has(m.id) || draftIds.has(m.id);
+    }));
+  }
+
+  function listCharts() {
+    if (!isCloudMode()) {
+      return readIndex().slice().sort(function (a, b) { return (b.updatedAt || 0) - (a.updatedAt || 0); });
+    }
+    const map = {};
+    for (const id in _syncedCharts) map[id] = metaOf(_syncedCharts[id]);
+    for (const m of readDraftIndex()) {
+      const d = loadDraftById(m.id);
+      if (d) map[m.id] = metaOf(d);
+    }
+    return Object.values(map).sort(function (a, b) { return (b.updatedAt || 0) - (a.updatedAt || 0); });
+  }
+
+  function loadChartById(id) {
+    if (!id) return null;
+    if (isCloudMode()) {
+      const draft = loadDraftById(id);
+      if (draft) return draft;
+      if (_syncedCharts[id]) return Object.assign(defaultChart(), _syncedCharts[id]);
+      return null;
+    }
+    try {
+      const raw = localStorage.getItem(CHART_PREFIX + id);
+      if (!raw) return null;
+      return Object.assign(defaultChart(), JSON.parse(raw));
+    } catch (e) { return null; }
+  }
+
+  const _syncTimers = {};
+  let _syncListeners = [];
+
+  function onSyncChange(fn) {
+    _syncListeners.push(fn);
+    return function () {
+      _syncListeners = _syncListeners.filter(function (f) { return f !== fn; });
+    };
+  }
+
+  function notifySyncChange() {
+    for (const fn of _syncListeners) {
+      try { fn(); } catch (e) {}
+    }
+  }
+
+  async function commitChartRemote(chart) {
+    if (!isCloudMode()) {
+      return saveChartToLibraryLocal(chart);
+    }
+    if (!chart.id) chart.id = uid();
+    clearTimeout(_syncTimers[chart.id]);
+    await DARemote.upsertChart(chart);
+    _syncedCharts[chart.id] = chart;
+    clearDraft(chart.id);
+    removeLegacyLocalChart(chart.id);
+    notifySyncChange();
+    return chart;
+  }
+
   function scheduleRemoteChartSave(chart) {
-    if (!DARemote.isConfigured()) return;
+    if (!isCloudMode()) return;
     const id = chart.id;
     clearTimeout(_syncTimers[id]);
     _syncTimers[id] = setTimeout(function () {
-      DARemote.upsertChart(chart).catch(function (e) {
+      commitChartRemote(chart).catch(function (e) {
         console.warn("Chart cloud sync failed:", e);
+        notifySyncChange();
       });
     }, 800);
   }
 
   function saveChartToLibrary(chart) {
-    const result = saveChartToLibraryLocal(chart);
+    if (!isCloudMode()) {
+      return saveChartToLibraryLocal(chart);
+    }
+    const result = saveDraft(chart);
     scheduleRemoteChartSave(chart);
+    notifySyncChange();
     return result;
   }
 
-  function deleteChartById(id) {
+  async function deleteChartById(id) {
     const c = loadChartById(id);
     const path = c ? chartAudioPath(c) : null;
-    try { localStorage.removeItem(CHART_PREFIX + id); } catch (e) {}
-    writeIndex(readIndex().filter(function (m) { return m.id !== id; }));
-    clearAudio(id);
-    if (DARemote.isConfigured()) {
-      DARemote.deleteChart(id).catch(function (e) {
-        console.warn("Chart cloud delete failed:", e);
-      });
+    clearDraft(id);
+    delete _syncedCharts[id];
+    removeLegacyLocalChart(id);
+    await clearAudio(id);
+    if (isCloudMode()) {
+      await DARemote.deleteChart(id);
       if (path) {
-        DARemote.deleteAudio(path).catch(function (e) {
+        try { await DARemote.deleteAudio(path); } catch (e) {
           console.warn("Audio cloud delete failed:", e);
-        });
+        }
       }
     }
+    notifySyncChange();
   }
 
   function getCurrentId() { try { return localStorage.getItem(CUR_KEY); } catch (e) { return null; } }
@@ -149,7 +267,6 @@ const OLD_LIB_KEY = "drumassist.library.v1";
 
   function newChart() { return defaultChart(); }
 
-  // duplicate an existing chart (new id, " copy" name) — caller copies audio
   function duplicateChart(chart, newName) {
     const c = Object.assign(defaultChart(), JSON.parse(JSON.stringify(chart)));
     c.id = uid();
@@ -159,24 +276,19 @@ const OLD_LIB_KEY = "drumassist.library.v1";
     return c;
   }
 
-  // ---- Cloud sync ----
+  // ---- Cloud sync (remote wins) ----
   async function syncFromRemote() {
-    if (!DARemote.isConfigured()) return false;
+    if (!isCloudMode()) return false;
     try {
       const remote = await DARemote.listChartsFull();
-      const remoteIds = new Set(remote.map(function (c) { return c.id; }));
-
+      _syncedCharts = {};
+      const remoteIds = new Set();
       for (const c of remote) {
-        saveChartToLibraryLocal(c);
+        _syncedCharts[c.id] = c;
+        remoteIds.add(c.id);
       }
-
-      for (const m of readIndex()) {
-        if (!remoteIds.has(m.id)) {
-          const c = loadChartById(m.id);
-          if (c) await DARemote.upsertChart(c);
-        }
-      }
-
+      purgeStaleLocalCharts(remoteIds);
+      notifySyncChange();
       return true;
     } catch (e) {
       console.warn("Remote sync failed:", e);
@@ -216,13 +328,12 @@ const OLD_LIB_KEY = "drumassist.library.v1";
   // ---- One-time migration of the old single-chart format ----
   function migrateLegacy() {
     try {
-      if (readIndex().length > 0) return;
+      if (readIndex().length > 0 || readDraftIndex().length > 0) return;
       const raw = localStorage.getItem(LEGACY_CHART_KEY) || localStorage.getItem(OLD_LEGACY_CHART_KEY);
       if (!raw) return;
       const c = Object.assign(defaultChart(), JSON.parse(raw));
       c.id = uid();
       saveChartToLibrary(c);
-      // move legacy "current" audio to this id
       (async function () {
         const old = await rawLoadAudio("current");
         if (old) { await saveAudio(c.id, old.name, old.data); await clearAudio("current"); }
@@ -259,12 +370,13 @@ const OLD_LIB_KEY = "drumassist.library.v1";
 
   async function saveAudio(id, name, arrayBuffer) {
     await saveAudioLocal(id, name, arrayBuffer);
-    if (DARemote.isConfigured()) {
+    if (isCloudMode()) {
       try {
         const path = await DARemote.uploadAudio(id, name, arrayBuffer);
         const c = loadChartById(id);
         if (c && path) {
           c.audioPath = path;
+          c.audioName = name;
           saveChartToLibrary(c);
         }
       } catch (e) {
@@ -298,7 +410,7 @@ const OLD_LIB_KEY = "drumassist.library.v1";
   async function loadAudio(id) {
     const local = await rawLoadAudio(id);
     if (local) return local;
-    if (!DARemote.isConfigured()) return null;
+    if (!isCloudMode()) return null;
     const c = loadChartById(id);
     const path = c ? chartAudioPath(c) : null;
     if (!path) return null;
@@ -332,7 +444,7 @@ const OLD_LIB_KEY = "drumassist.library.v1";
       await saveAudio(toId, rec.name, rec.data);
       return;
     }
-    if (!DARemote.isConfigured()) return;
+    if (!isCloudMode()) return;
     const src = loadChartById(fromId);
     const path = src ? chartAudioPath(src) : null;
     if (!path) return;
@@ -382,6 +494,7 @@ const OLD_LIB_KEY = "drumassist.library.v1";
 export const DAStore = {
   uid, defaultChart, newChart, duplicateChart, loadUI, saveUI,
   listCharts, loadChartById, saveChartToLibrary, deleteChartById,
+  commitChartRemote, chartHasDraft, isCloudMode, onSyncChange,
   getCurrentId, setCurrentId, migrateFromDrumAssist, migrateLegacy, syncFromRemote,
   saveAudio, loadAudio, clearAudio, copyAudio, exportJSON, importJSON,
   tsNum, tsDen, secPerBeat, isAccentBeat, isBarStart, chartStart, clampSongPos,

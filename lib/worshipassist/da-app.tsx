@@ -61,6 +61,8 @@ import { SidePanel } from "./da-side";
     const [chart, setChart] = useState(null);
     const [charts, setCharts] = useState([]);
     const [chartsOpen, setChartsOpen] = useState(false);
+    const [syncTick, setSyncTick] = useState(0);
+    const [syncing, setSyncing] = useState(false);
     const [keymap, setKeymap] = useState(Object.assign({}, S.DEFAULT_KEYMAP, ui0.keymap || {}));
     const [keyEntry, setKeyEntry] = useState(!!ui0.keyEntry);
     const [listenAction, setListenAction] = useState(null);
@@ -110,7 +112,14 @@ import { SidePanel } from "./da-side";
 
     const activeMode = isMobile ? "play" : mode;
 
-    // load charts from cloud + local cache
+    useEffect(function () {
+      return S.onSyncChange(function () {
+        setSyncTick(function (t) { return t + 1; });
+        setCharts(S.listCharts());
+      });
+    }, []);
+
+    // load charts from cloud + local drafts
     useEffect(function () {
       let dead = false;
       (async function () {
@@ -232,12 +241,31 @@ import { SidePanel } from "./da-side";
     }
     function deleteChartAction(id) {
       if (!confirm("Delete this chart and its audio? This can't be undone.")) return;
-      S.deleteChartById(id);
-      const list = S.listCharts();
-      setCharts(list);
-      if (id === chartRef.current.id) {
-        if (list.length) openChart(list[0].id);
-        else newChartAction();
+      (async function () {
+        try {
+          await S.deleteChartById(id);
+          const list = S.listCharts();
+          setCharts(list);
+          if (id === chartRef.current.id) {
+            if (list.length) openChart(list[0].id);
+            else newChartAction();
+          }
+        } catch (e) {
+          alert("Could not delete chart from cloud. Check your connection and try again.");
+        }
+      })();
+    }
+
+    async function saveToCloudNow() {
+      if (!chart || !S.isCloudMode()) return;
+      setSyncing(true);
+      try {
+        await S.commitChartRemote(chart);
+        setCharts(S.listCharts());
+      } catch (e) {
+        alert("Could not save to cloud. Your changes are still kept locally until sync succeeds.");
+      } finally {
+        setSyncing(false);
       }
     }
 
@@ -732,6 +760,7 @@ import { SidePanel } from "./da-side";
     const bar = beatF >= 0 ? Math.floor(beatF / tsN) + 1 : 0;
     const beat = beatF >= 0 ? Math.floor(((beatF % tsN) + tsN) % tsN) + 1 : 0;
     scrollSecRef.current = 3.7 - (spacing - 1) * (3.7 - 1.3) / 9;
+    const hasDraft = S.isCloudMode() && S.chartHasDraft(chart.id);
 
     // ---- render ----
     return React.createElement("div", { className: "app", "data-mode": activeMode, "data-layout": isMobile ? "mobile" : "desktop" },
@@ -941,7 +970,14 @@ import { SidePanel } from "./da-side";
         React.createElement("span", null, "snap " + (snapEnabled ? SNAP_OPTS.find(function (o) { return o.div === snapDiv; }).label : "off")),
         loopOn && loopA != null && loopB != null ? React.createElement("span", { className: "loop-tag" }, "loop " + fmtTime(loopA) + "–" + fmtTime(loopB)) : null,
         React.createElement("div", { className: "spacer", style: { flex: 1 } }),
-        React.createElement("span", null, "saved locally")
+        S.isCloudMode() ? React.createElement(React.Fragment, null,
+          hasDraft ? React.createElement("button", {
+            className: "btn primary", style: { padding: "4px 12px", fontSize: 12 },
+            disabled: syncing, onClick: saveToCloudNow
+          }, syncing ? "Saving…" : "Save to cloud") : null,
+          React.createElement("span", null,
+            hasDraft ? "unsynced draft" : "synced to cloud")
+        ) : React.createElement("span", null, "saved locally")
       ) : null,
       React.createElement("input", {
         ref: fileRef, type: "file", accept: "audio/*", className: "file-input",
